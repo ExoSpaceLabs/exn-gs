@@ -165,7 +165,8 @@ int App::run() {
       demo_send_tm(/*apid*/1, /*svc*/1, /*ssvc*/2, "ACK_CONNECT");
 
       // Now explicitly request HK streaming in demo:
-      demo_send_tc(/*apid*/1, /*svc*/3, /*ssvc*/1, "HK_ENABLE period=2s");
+
+      demo_send_tc(/*apid*/1, /*svc*/3, /*ssvc*/1, "HK_ENABLE periodic=2s");
       demo_send_tm(/*apid*/1, /*svc*/3, /*ssvc*/2, "ACK_HK_ENABLE");
 
       demo_stream_enabled = true;
@@ -194,6 +195,7 @@ int App::run() {
     demo_timer.async_wait([&](const boost::system::error_code& ec) {
       if (ec) return;
       if (cfg_.serial_port.empty() && demo_stream_enabled) {
+        demo_send_tc(/*apid*/1, /*svc*/3, /*ssvc*/4, "HK_REQ");
         demo_send_tm(/*apid*/1, /*svc*/3, /*ssvc*/25, "HK_REPORT");
       }
       arm_demo();
