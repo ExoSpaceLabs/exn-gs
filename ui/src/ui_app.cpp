@@ -15,8 +15,6 @@
 #include <iomanip>
 #include <sstream>
 #include <thread>
-#include <vector>
-
 
 namespace exogs::ui {
 
@@ -74,8 +72,6 @@ struct Col { const char* name; int w; bool right; };
 static std::string render_packet_table_text(const std::deque<PacketRow>& rows,
                                             int max_rows,
                                             int term_w) {
-  // Fixed columns like htop. These do NOT collapse.
-  // Total width without DESC: 8 + 1 + 3+1 +3+1 +3+1 +5+1 +4+1 +5+1 +5+1 +3+1 +4+1 = 55
   const Col cols[] = {
     {"TS",   8, false},
     {"VER",  3, true},
@@ -90,34 +86,24 @@ static std::string render_packet_table_text(const std::deque<PacketRow>& rows,
   };
 
   int base_w = 0;
-  for (auto& c : cols) base_w += c.w + 1; // +1 space
-  // base_w currently includes a trailing space; that's fine.
+  for (auto& c : cols) base_w += c.w + 1;
 
-  // Leave at least 10 chars for DESC if possible.
   int desc_w = std::max(10, term_w - base_w - 1);
-  // Hard clamp so it doesn't explode.
-  desc_w = std::min(desc_w, 60);
+  desc_w = std::min(desc_w, 80);
 
   std::ostringstream out;
 
-  // Header
-  for (auto& c : cols) {
-    out << pad_right(c.name, c.w) << " ";
-  }
+  for (auto& c : cols) out << pad_right(c.name, c.w) << " ";
   out << pad_right("DESC", desc_w) << "\n";
 
-  // Separator line
   int total_w = base_w + desc_w;
   out << std::string(std::max(0, total_w), '-') << "\n";
 
-  // Rows (most recent first)
   int added = 0;
   for (auto it = rows.rbegin(); it != rows.rend() && added < max_rows; ++it, ++added) {
     const auto& m = it->m;
-    const std::string ts = fmt_time_local(m.ts_ns);
-
     std::string vals[10] = {
-      ts,
+      fmt_time_local(m.ts_ns),
       std::to_string(m.ver),
       std::to_string(m.typ),
       std::to_string(m.shf),
@@ -140,7 +126,8 @@ static std::string render_packet_table_text(const std::deque<PacketRow>& rows,
   return out.str();
 }
 
-  static ftxui::Element preformatted_block(const std::string& s) {
+// Render multi-line text WITHOUT wrapping (paragraph wraps).
+static ftxui::Element preformatted_block(const std::string& s) {
   using namespace ftxui;
   Elements lines;
   size_t start = 0;
@@ -151,10 +138,8 @@ static std::string render_packet_table_text(const std::deque<PacketRow>& rows,
     if (end == s.size()) break;
     start = end + 1;
   }
-  // frame => clip content to the available box (prevents overflow and avoids wrapping)
-  return vbox(std::move(lines)) | frame;
+  return vbox(std::move(lines)) | frame; // frame clips to available area
 }
-
 
 int UiApp::run() {
   boost::asio::io_context io;
@@ -194,6 +179,7 @@ int UiApp::run() {
   using namespace ftxui;
   auto screen = ScreenInteractive::Fullscreen();
 
+  // Refresh once per second
   std::atomic<bool> running{true};
   std::thread tick([&] {
     while (running.load()) {
@@ -202,7 +188,14 @@ int UiApp::run() {
     }
   });
 
-  auto renderer = Renderer([&] {
+  // CMD + help state
+  bool cmd_mode = false;
+  bool help_mode = false;
+  std::string cmd_input;
+
+  auto cmd_input_comp = Input(&cmd_input, "type command…");
+
+  auto main_renderer = Renderer([&] {
     std::string link;
     std::deque<PacketRow> tc_rows;
     std::deque<PacketRow> tm_rows;
@@ -218,25 +211,13 @@ int UiApp::run() {
     const int term_w = size.dimx;
     const int term_h = size.dimy;
 
-    // Compute how many rows we can show.
-    // Top bar + services + titles + separators + footer ~ 10-12 lines.
-    const int overhead = 12;
-    const int available_h = std::max(4, term_h - overhead);
-    const int table_rows = std::max(1, available_h - 3); // header + separator + some padding
+    // Leave room for top + services + footer/cmd bar.
+    const int overhead = cmd_mode ? 14 : 10;
+    const int available_h = std::max(6, term_h - overhead);
+    const int table_rows = std::max(1, available_h - 3);
 
-    // Render services in one line, no collapsing boxes.
-    // We'll always show the labels; status dots can be improved later with real status.
-    auto services_panel = hbox({
-      text("Services: ") | bold,
-      text("HK ") | bold, text("● ") | color(Color::Green), text("| ") | bold,
-      text("TIME ") | bold, text("● ") | color(Color::Green), text("| ") | bold,
-      text("EVENT ") | bold, text("● ") | color(Color::Green), text("| ") | bold,
-      text("MEM ") | bold, text("● ") | color(Color::Yellow), text("| ") | bold,
-      text("PAYLOAD ") | bold, text("● ") | color(Color::Red), text("| ") | bold,
-      text("PI-CAM ") | bold, text("● ") | color(Color::Red), text("| ") | bold,
-      text("FPGA-AI ") | bold, text("● ") | color(Color::Red), text("| ") | bold,
-      text("MODE ") | bold, text("●") | color(Color::Green),
-    }) | border;
+    const std::string tc_text = render_packet_table_text(tc_rows, table_rows, term_w / 2);
+    const std::string tm_text = render_packet_table_text(tm_rows, table_rows, term_w / 2);
 
     auto top = hbox({
       text("exo-gs") | bold,
@@ -244,48 +225,136 @@ int UiApp::run() {
       text("Link: " + link),
     }) | border;
 
-    //auto services_panel = vbox({
-    //  text("Services: ") | bold,
-    //  separator(),
-    //  services_line,
-    //}) | border;
-
-    // Build table text blocks
-    const std::string tc_text = render_packet_table_text(tc_rows, table_rows, term_w / 2);
-    const std::string tm_text = render_packet_table_text(tm_rows, table_rows, term_w / 2);
+    auto services_panel = vbox({
+      text("Services") | bold,
+      separator(),
+      hbox({
+        text("HK ")|bold, text("●  ")|color(Color::Green),
+        text("TIME ")|bold, text("●  ")|color(Color::Green),
+        text("EVENT ")|bold, text("●  ")|color(Color::Green),
+        text("MEM ")|bold, text("●  ")|color(Color::Green),
+        text("PAYLOAD ")|bold, text("●  ")|color(Color::Green),
+        text("MODE ")|bold, text("●")|color(Color::Green),
+      }),
+    }) | border;
 
     auto tc_panel = vbox({
       text("TCs (sent from GS)") | bold,
       separator(),
-      preformatted_block(tc_text) | ftxui::color(Color::GrayLight),
+      preformatted_block(tc_text) | color(Color::GrayLight),
     }) | border | flex;
 
     auto tm_panel = vbox({
       text("TMs (received by GS)") | bold,
       separator(),
-      preformatted_block(tm_text) | ftxui::color(Color::GrayLight),
+      preformatted_block(tm_text) | color(Color::GrayLight),
     }) | border | flex;
 
-    return vbox({
+    // Bottom bar: only show when CMD is open (as requested)
+    Element cmd_bar = filler();
+    if (cmd_mode) {
+      cmd_bar = vbox({
+        text("CMD") | bold,
+        separator(),
+        hbox({ text("> ") | bold, cmd_input_comp->Render() }) | border,
+        text("Enter=send   Esc=close   h=help") | color(Color::GrayLight),
+      }) | border;
+    } else {
+      cmd_bar = text("Keys: c=CMD   h=HELP   q=QUIT") | color(Color::GrayLight);
+    }
+
+    auto base = vbox({
       top,
       services_panel,
       hbox({tc_panel, tm_panel}) | flex,
-      text("Keys: c=CONNECT  d=DISCONNECT  p=PING  q=QUIT") | color(Color::GrayLight),
+      cmd_bar,
+    });
+
+    if (!help_mode)
+      return base;
+
+    // Help overlay (popup)
+    auto help = vbox({
+      text("Help") | bold,
+      separator(),
+      text("UI keys:") | bold,
+      text("  c   open CMD bar"),
+      text("  h   toggle this help"),
+      text("  q   quit (only when CMD/Help closed)"),
+      text("  Esc close CMD/Help"),
+      separator(),
+      text("Daemon commands (examples):") | bold,
+      text("  CONNECT"),
+      text("  DISCONNECT"),
+      text("  PING"),
+      text("  HK_ENABLE"),
+      text("  HK_DISABLE"),
+      text("  HK_REQ"),
+    }) | border | bgcolor(Color::Black) | color(Color::White);
+
+    return dbox({
+      base,
+      help | clear_under | center,
     });
   });
 
-  auto component = CatchEvent(renderer, [&](Event e) {
-    if (e == Event::Character('q') || e == Event::Escape) {
+  // Root container owns focus between input and renderer.
+  auto root = Container::Vertical({
+    main_renderer
+  });
+
+  // Event handling over the whole app
+  auto wrapped = CatchEvent(root, [&](Event e) {
+    // Help has priority: Esc closes help first
+    if (help_mode) {
+      if (e == Event::Escape || e == Event::Character('h')) {
+        help_mode = false;
+        return true;
+      }
+      // don't let help steal typing etc.
+      return true;
+    }
+
+    // Global quit only when not in CMD mode
+    if (!cmd_mode && (e == Event::Character('q') || e == Event::Escape)) {
       screen.ExitLoopClosure()();
       return true;
     }
-    if (e == Event::Character('c')) { client.send_command("CONNECT"); return true; }
-    if (e == Event::Character('d')) { client.send_command("DISCONNECT"); return true; }
-    if (e == Event::Character('p')) { client.send_command("PING"); return true; }
+
+    // Toggle help
+    if (e == Event::Character('h')) {
+      help_mode = true;
+      return true;
+    }
+
+    // Toggle CMD mode
+
+    if (e == Event::Character('c') && !cmd_mode) {
+      cmd_mode = true;
+      return true;
+    }
+
+    // CMD mode behavior
+    if (cmd_mode) {
+      if (e == Event::Escape) {
+        cmd_mode = false;
+        return true;
+      }
+      if (e == Event::Return) {
+        if (!cmd_input.empty()) {
+          client.send_command(cmd_input);
+          cmd_input.clear();
+        }
+        return true;
+      }
+      // forward everything else to the Input widget
+      return cmd_input_comp->OnEvent(e);
+    }
+
     return false;
   });
 
-  screen.Loop(component);
+  screen.Loop(wrapped);
 
   running.store(false);
   if (tick.joinable()) tick.join();
