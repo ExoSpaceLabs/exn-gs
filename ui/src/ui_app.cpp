@@ -225,17 +225,14 @@ int UiApp::run() {
       text("Link: " + link),
     }) | border;
 
-    auto services_panel = vbox({
-      text("Services") | bold,
-      separator(),
-      hbox({
-        text("HK ")|bold, text("●  ")|color(Color::Green),
-        text("TIME ")|bold, text("●  ")|color(Color::Green),
-        text("EVENT ")|bold, text("●  ")|color(Color::Green),
-        text("MEM ")|bold, text("●  ")|color(Color::Green),
-        text("PAYLOAD ")|bold, text("●  ")|color(Color::Green),
-        text("MODE ")|bold, text("●")|color(Color::Green),
-      }),
+    auto services_panel = hbox({
+        text("Services: ") | bold,
+        text("HK ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
+        text("TIME ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
+        text("EVENT ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
+        text("MEM ")|bold, text("●  ")|color(Color::Yellow), text(" | ") | bold,
+        text("PAYLOAD ")|bold, text("●  ")|color(Color::Red), text(" | ") | bold,
+        text("MODE ")|bold, text("●")|color(Color::Green)
     }) | border;
 
     auto tc_panel = vbox({
