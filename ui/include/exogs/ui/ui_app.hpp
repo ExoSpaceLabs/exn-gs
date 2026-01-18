@@ -24,9 +24,11 @@ private:
   std::mutex mtx_;
   std::string link_line_ = "DISCONNECTED";
   std::unordered_map<int, UiServiceStatus> services_;
-  std::deque<std::string> log_;
+  std::deque<std::string> tc_log_;
+  std::deque<std::string> tm_log_;
 
-  void push_log(const std::string& s);
+  void push_tc(const std::string& s);
+  void push_tm(const std::string& s);
 };
 
 } // namespace exogs::ui

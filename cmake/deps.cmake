@@ -1,6 +1,9 @@
 include(FetchContent)
 
-# Boost (prefer system). On Linux: sudo apt-get install libboost-system-dev
+# Boost (prefer system). On Debian/Ubuntu:
+#   sudo apt-get install libboost-dev libboost-system-dev
+# Force legacy FindBoost behavior to avoid partial Boost CMake configs.
+set(Boost_NO_BOOST_CMAKE ON)
 find_package(Boost REQUIRED COMPONENTS system)
 
 # FTXUI for the UI. This FetchContent requires internet at configure time.

@@ -54,7 +54,8 @@ int App::run() {
     // primary header is 6 bytes: [0..1]=pktid, [2..3]=seq, [4..5]=len
     exogs::PacketRecord rec;
     rec.ts_ns = exogs::now_ns();
-    rec.dir = exogs::Direction::TC;
+    // Bytes coming from the STM side are telemetry from GS perspective.
+    rec.dir = exogs::Direction::TM;
     if (pkt.size() >= 6) {
       const uint16_t pktid = (uint16_t(pkt[0]) << 8) | uint16_t(pkt[1]);
       const uint16_t seq = (uint16_t(pkt[2]) << 8) | uint16_t(pkt[3]);
@@ -72,7 +73,7 @@ int App::run() {
 
     // For now, event payload is a single summary string.
     // v1: encode full record.
-    std::string s = "TC apid=" + std::to_string(rec.apid) + " seq=" + std::to_string(rec.seq) +
+    std::string s = "TM apid=" + std::to_string(rec.apid) + " seq=" + std::to_string(rec.seq) +
                     " srv=" + std::to_string(rec.service) + "/" + std::to_string(rec.subservice) +
                     " " + rec.summary;
     ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::PacketRx, exogs::proto::pack_string(s)});
@@ -95,17 +96,21 @@ int App::run() {
 
     if (cmd == "PING") {
       ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::Hello, exogs::proto::pack_string("PONG")});
+      ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::PacketTx, exogs::proto::pack_string("TC cmd=PING")});
     } else if (cmd == "CONNECT") {
       serial.start();
       state.set_link(exogs::LinkState::Connected, cfg_.serial_port.empty() ? "(demo)" : cfg_.serial_port);
       send_link_state();
+      ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::PacketTx, exogs::proto::pack_string("TC cmd=CONNECT")});
     } else if (cmd == "DISCONNECT") {
       serial.stop();
       state.set_link(exogs::LinkState::Disconnected, "");
       send_link_state();
+      ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::PacketTx, exogs::proto::pack_string("TC cmd=DISCONNECT")});
     } else if (cmd.rfind("SEND ", 0) == 0) {
       // TODO: implement TX path
       ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::Hello, exogs::proto::pack_string("TX not implemented")});
+      ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::PacketTx, exogs::proto::pack_string("TC " + cmd)});
     }
   });
 

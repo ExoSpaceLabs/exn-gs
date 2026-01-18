@@ -8,7 +8,10 @@ namespace exogs::proto {
 enum class MsgType : uint16_t {
   Hello = 1,
   LinkState = 2,
+  // Telemetry received from the STM side (or demo generator).
   PacketRx = 3,
+  // Telecommands sent by GS towards STM (or demo echo).
+  PacketTx = 4,
   Error = 255,
 
   Command = 10,

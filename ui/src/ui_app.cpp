@@ -18,10 +18,20 @@ static std::string status_color(const std::string& s) {
 
 UiApp::UiApp(std::string host, uint16_t port) : host_(std::move(host)), port_(port) {}
 
-void UiApp::push_log(const std::string& s) {
+static void trim(std::deque<std::string>& q, size_t maxn) {
+  while (q.size() > maxn) q.pop_front();
+}
+
+void UiApp::push_tc(const std::string& s) {
   std::lock_guard<std::mutex> lk(mtx_);
-  log_.push_back(s);
-  while (log_.size() > 200) log_.pop_front();
+  tc_log_.push_back(s);
+  trim(tc_log_, 200);
+}
+
+void UiApp::push_tm(const std::string& s) {
+  std::lock_guard<std::mutex> lk(mtx_);
+  tm_log_.push_back(s);
+  trim(tm_log_, 200);
 }
 
 int UiApp::run() {
@@ -34,7 +44,7 @@ int UiApp::run() {
 
     switch (f.type) {
       case exogs::proto::MsgType::Hello:
-        push_log("[hello] " + s);
+        push_tm("[hello] " + s);
         break;
       case exogs::proto::MsgType::LinkState: {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -42,7 +52,10 @@ int UiApp::run() {
         break;
       }
       case exogs::proto::MsgType::PacketRx:
-        push_log(s);
+        push_tm(s);
+        break;
+      case exogs::proto::MsgType::PacketTx:
+        push_tc(s);
         break;
       default:
         break;
@@ -60,12 +73,14 @@ int UiApp::run() {
 
   auto renderer = Renderer([&] {
     std::string link;
-    std::deque<std::string> log;
+    std::deque<std::string> tc_log;
+    std::deque<std::string> tm_log;
 
     {
       std::lock_guard<std::mutex> lk(mtx_);
       link = link_line_;
-      log = log_;
+      tc_log = tc_log_;
+      tm_log = tm_log_;
     }
 
     // Services panel (static placeholders for now)
@@ -73,34 +88,34 @@ int UiApp::run() {
       "HK", "TIME", "EVENT", "MEM", "PAYLOAD", "MODE"
     };
 
-    auto services_box = vbox({
+    // Services as a row (htop-ish summary bar)
+    Elements service_cells;
+    for (size_t i = 0; i < services.size(); ++i) {
+      auto cell = vbox({
+        text(services[i]) | (i == (size_t)selected_service ? inverted : nothing),
+        text("●") | color(Color::Green) // v0: always green
+      }) | border;
+      service_cells.push_back(cell);
+    }
+    auto services_row = vbox({
       text("Services") | bold,
       separator(),
-      vbox([
-        &]{
-          Elements rows;
-          for (size_t i = 0; i < services.size(); ++i) {
-            auto row = hbox({
-              text(services[i]) | (i == (size_t)selected_service ? inverted : nothing),
-              filler(),
-              text("●") | color(Color::Green) // v0: always green
-            });
-            rows.push_back(row);
-          }
-          return rows;
-        }())
+      hbox(std::move(service_cells))
     }) | border;
 
-    Elements log_lines;
-    for (auto it = log.rbegin(); it != log.rend() && log_lines.size() < 20; ++it) {
-      log_lines.push_back(text(*it));
-    }
+    auto make_log_box = [&](const char* title, const std::deque<std::string>& src) {
+      Elements lines;
+      for (auto it = src.rbegin(); it != src.rend() && lines.size() < 18; ++it)
+        lines.push_back(text(*it));
+      return vbox({
+        text(title) | bold,
+        separator(),
+        vbox(std::move(lines))
+      }) | border;
+    };
 
-    auto log_box = vbox({
-      text("Received TCs") | bold,
-      separator(),
-      vbox(std::move(log_lines))
-    }) | border;
+    auto tc_box = make_log_box("TCs (sent from GS)", tc_log);
+    auto tm_box = make_log_box("TMs (received by GS)", tm_log);
 
     auto top = hbox({
       text("exo-gs") | bold,
@@ -110,9 +125,10 @@ int UiApp::run() {
 
     return vbox({
       top | border,
+      services_row,
       hbox({
-        services_box | size(WIDTH, LESS_THAN, 30),
-        log_box
+        tc_box,
+        tm_box
       })
     });
   });
@@ -124,17 +140,17 @@ int UiApp::run() {
     }
     if (e == Event::Character('c')) {
       client.send_command("CONNECT");
-      push_log("[cmd] CONNECT");
+      push_tc("[ui] CONNECT");
       return true;
     }
     if (e == Event::Character('d')) {
       client.send_command("DISCONNECT");
-      push_log("[cmd] DISCONNECT");
+      push_tc("[ui] DISCONNECT");
       return true;
     }
     if (e == Event::Character('p')) {
       client.send_command("PING");
-      push_log("[cmd] PING");
+      push_tc("[ui] PING");
       return true;
     }
     return false;
