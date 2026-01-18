@@ -21,8 +21,7 @@ sudo apt install -y libboost-dev libboost-system-dev
 FTXUI is fetched via FetchContent (requires internet during CMake configure).
 
 ```bash
-cmake -S . -B build
-cmake --build build -j
+cmake -S . -B build && cmake --build build -j
 ```
 
 ## Run
