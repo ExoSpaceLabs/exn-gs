@@ -1,6 +1,7 @@
 add_library(exogs_shared
   src/protocol.cpp
   src/time.cpp
+  src/framer.cpp
 )
 
 target_include_directories(exogs_shared PUBLIC

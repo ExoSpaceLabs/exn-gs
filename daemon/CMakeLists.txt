@@ -1,8 +1,9 @@
+
+
 add_executable(exo_gsd
   src/main.cpp
   src/app.cpp
   src/serial_link.cpp
-  src/framer.cpp
   src/state.cpp
   src/storage_file.cpp
   src/ipc_server.cpp

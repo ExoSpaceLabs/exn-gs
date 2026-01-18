@@ -1,10 +1,15 @@
 #include "exogs/daemon/app.hpp"
 #include <iostream>
 
+bool verbose = false;
+
 static void print_usage(const char* exe) {
   std::cerr
-    << "Usage: " << exe << " [--listen HOST:PORT] [--port SERIAL] [--baud N] [--logdir DIR]\n"
-    << "Example: " << exe << " --listen 127.0.0.1:7777 --port /dev/ttyACM0 --baud 115200\n";
+  << "Usage: " << exe << " [--listen HOST:PORT] [--port SERIAL|tcp://HOST:PORT] [--baud N] [--logdir DIR]\n"
+  << "  -v, --verbose        Print TC/TM packets to console\n"
+  << "Example: " << exe << " --listen 127.0.0.1:7777 --port /dev/ttyACM0 --baud 115200\n"
+  << "Example: " << exe << " --listen 127.0.0.1:7777 --port tcp://127.0.0.1:9000\n";
+
 }
 
 int main(int argc, char** argv) {
@@ -39,13 +44,15 @@ int main(int argc, char** argv) {
     } else if (a == "-h" || a == "--help") {
       print_usage(argv[0]);
       return 0;
+    } else if (a == "-v" || a == "--verbose") {
+      verbose = true;
     } else {
       std::cerr << "Unknown arg: " << a << "\n";
       print_usage(argv[0]);
       return 2;
     }
   }
-
+  cfg.verbose = verbose;
   exogs::daemon::App app(cfg);
   return app.run();
 }

@@ -12,6 +12,7 @@ struct AppConfig {
   uint32_t baud = 115200;
 
   std::string log_dir = "logs";
+  bool verbose = false;
 };
 
 class App {

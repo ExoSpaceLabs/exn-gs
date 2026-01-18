@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(exo_gs LANGUAGES CXX)
+project(exn_gs LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,3 +13,4 @@ include(cmake/deps.cmake)
 add_subdirectory(shared)
 add_subdirectory(daemon)
 add_subdirectory(ui)
+add_subdirectory(sim)

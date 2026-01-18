@@ -25,14 +25,24 @@ cmake -S . -B build && cmake --build build -j
 ```
 
 ## Run
+
+Run simulator:
+```bash
+./build/sim/stm32_sim --listen 127.0.0.1:9000 --hk-period 2
+
+```
+
 Start daemon (demo mode if you omit --port):
 ```bash
-./build/daemon/exo_gsd --listen 127.0.0.1:7777
+./build/daemon/exo_gsd --listen 127.0.0.1:7777 --port tcp://127.0.0.1:9000
+
 ```
+
 
 Start UI:
 ```bash
 ./build/ui/exo_gsui --connect 127.0.0.1:7777
+
 ```
 
 Keys in UI:
