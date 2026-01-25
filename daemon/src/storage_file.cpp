@@ -1,9 +1,9 @@
-#include "exogs/daemon/storage.hpp"
+#include "exn/daemon/storage.hpp"
 #include <filesystem>
 #include <fstream>
 #include <mutex>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 class FileLoggerSink final : public IStorageSink {
 public:
@@ -12,13 +12,13 @@ public:
     out_.open(std::filesystem::path(dir_) / "packets.jsonl", std::ios::app);
   }
 
-  void store(const exogs::PacketRecord& rec) override {
+  void store(const exn::PacketRecord& rec) override {
     std::lock_guard<std::mutex> lk(mtx_);
     if (!out_) return;
     // Minimal JSONL without extra deps.
     out_ << "{"
          << "\"ts_ns\":" << rec.ts_ns << ","
-         << "\"dir\":" << (rec.dir == exogs::Direction::TC ? "\"TC\"" : "\"TM\"") << ","
+         << "\"dir\":" << (rec.dir == exn::Direction::TC ? "\"TC\"" : "\"TM\"") << ","
          << "\"apid\":" << rec.apid << ","
          << "\"seq\":" << rec.seq << ","
          << "\"service\":" << unsigned(rec.service) << ","
@@ -54,4 +54,4 @@ std::unique_ptr<IStorageSink> make_file_logger_sink(const std::string& dir) {
   return std::make_unique<FileLoggerSink>(dir);
 }
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

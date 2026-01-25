@@ -1,9 +1,9 @@
 #pragma once
 #include <cstdint>
 
-namespace exogs {
+namespace exn {
 
     // Wall-clock nanoseconds since Unix epoch.
     uint64_t now_ns();
 
-} // namespace exogs
+} // namespace exn

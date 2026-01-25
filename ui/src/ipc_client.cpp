@@ -1,9 +1,9 @@
-#include "exogs/ui/ipc_client.hpp"
-#include "exogs/shared/protocol.hpp"
+#include "exn/ui/ipc_client.hpp"
+#include "exn/shared/protocol.hpp"
 
 #include <iostream>
 
-namespace exogs::ui {
+namespace exn::ui {
 
 IpcClient::IpcClient(boost::asio::io_context& io, std::string host, uint16_t port)
   : io_(io), host_(std::move(host)), port_(port), sock_(io) {
@@ -40,8 +40,8 @@ void IpcClient::do_read() {
         return;
       }
       rxbuf_.insert(rxbuf_.end(), tmp_.data(), tmp_.data() + n);
-      exogs::proto::Frame f;
-      while (exogs::proto::try_decode(rxbuf_, f)) {
+      exn::proto::Frame f;
+      while (exn::proto::try_decode(rxbuf_, f)) {
         if (on_frame_) on_frame_(f);
       }
       do_read();
@@ -51,12 +51,12 @@ void IpcClient::do_read() {
 void IpcClient::send_command(const std::string& cmd) {
   std::lock_guard<std::mutex> lk(tx_mtx_);
   if (!sock_.is_open()) return;
-  exogs::proto::Frame f{exogs::proto::MsgType::Command, exogs::proto::pack_string(cmd)};
-  auto bytes = std::make_shared<std::vector<uint8_t>>(exogs::proto::encode(f));
+  exn::proto::Frame f{exn::proto::MsgType::Command, exn::proto::pack_string(cmd)};
+  auto bytes = std::make_shared<std::vector<uint8_t>>(exn::proto::encode(f));
   boost::asio::async_write(sock_, boost::asio::buffer(*bytes),
     [bytes](const boost::system::error_code&, std::size_t) {
       // ignore
     });
 }
 
-} // namespace exogs::ui
+} // namespace exn::ui

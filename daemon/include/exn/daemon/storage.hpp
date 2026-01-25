@@ -1,15 +1,15 @@
 #pragma once
-#include "exogs/shared/types.hpp"
+#include "exn/shared/types.hpp"
 #include <memory>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 class IStorageSink {
 public:
   virtual ~IStorageSink() = default;
-  virtual void store(const exogs::PacketRecord& rec) = 0;
+  virtual void store(const exn::PacketRecord& rec) = 0;
 };
 
 std::unique_ptr<IStorageSink> make_file_logger_sink(const std::string& dir);
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

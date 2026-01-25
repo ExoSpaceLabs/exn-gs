@@ -1,6 +1,6 @@
-#include "exogs/shared/protocol.hpp"
+#include "exn/shared/protocol.hpp"
 
-namespace exogs::proto {
+namespace exn::proto {
 
 static void append_u32(std::vector<uint8_t>& v, uint32_t x) {
   v.push_back(uint8_t((x >> 24) & 0xFF));
@@ -117,4 +117,4 @@ bool unpack_packet_meta(const std::vector<uint8_t>& p, PacketMeta& m, std::strin
   return true;
 }
 
-} // namespace exogs::proto
+} // namespace exn::proto

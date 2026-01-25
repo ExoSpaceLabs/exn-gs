@@ -1,4 +1,4 @@
-#include "exogs/ui/ui_app.hpp"
+#include "exn/ui/ui_app.hpp"
 #include <iostream>
 
 static void usage(const char* exe) {
@@ -34,6 +34,6 @@ int main(int argc, char** argv) {
     }
   }
 
-  exogs::ui::UiApp app(host, port);
+  exn::ui::UiApp app(host, port);
   return app.run();
 }

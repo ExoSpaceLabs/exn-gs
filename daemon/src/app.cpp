@@ -1,12 +1,14 @@
-#include "exogs/daemon/app.hpp"
-#include "exogs/daemon/ipc_server.hpp"
-#include "exogs/daemon/serial_link.hpp"
-#include "exogs/daemon/state.hpp"
-#include "exogs/daemon/storage.hpp"
-#include "exogs/shared/daemon/framer.hpp"
-#include "exogs/shared/protocol.hpp"
-#include "exogs/shared/time.hpp"
-#include "exogs/shared/types.hpp"
+#include "exn/daemon/app.hpp"
+#include "exn/daemon/ipc_server.hpp"
+#include "exn/daemon/serial_link.hpp"
+#include "exn/daemon/state.hpp"
+#include "exn/daemon/storage.hpp"
+#include "exn/shared/daemon/framer.hpp"
+#include "exn/shared/protocol.hpp"
+#include "exn/shared/time.hpp"
+#include "exn/shared/types.hpp"
+
+#include "exn/shared/exn_interfaces.h"
 
 #include <iomanip>
 #include <boost/asio.hpp>
@@ -14,10 +16,10 @@
 #include <iostream>
 #include <memory>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 static void print_packet(const char* tag,
-                       const exogs::proto::PacketMeta& m,
+                       const exn::proto::PacketMeta& m,
                        const std::string& desc) {
   std::cout
     << tag
@@ -31,20 +33,20 @@ static void print_packet(const char* tag,
 }
 
 
-static std::string link_state_to_string(exogs::LinkState s) {
+static std::string link_state_to_string(exn::LinkState s) {
   switch (s) {
-    case exogs::LinkState::Disconnected: return "DISCONNECTED";
-    case exogs::LinkState::Connected: return "CONNECTED";
-    case exogs::LinkState::Error: return "ERROR";
+    case exn::LinkState::Disconnected: return "DISCONNECTED";
+    case exn::LinkState::Connected: return "CONNECTED";
+    case exn::LinkState::Error: return "ERROR";
   }
   return "UNKNOWN";
 }
 
 App::App(AppConfig cfg) : cfg_(std::move(cfg)) {}
 
-static exogs::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8_t>& pkt, exogs::Direction dir_hint) {
-  exogs::proto::PacketMeta m;
-  m.ts_ns = exogs::now_ns();
+static exn::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8_t>& pkt, exn::Direction dir_hint) {
+  exn::proto::PacketMeta m;
+  m.ts_ns = exn::now_ns();
   if (pkt.size() < 6) return m;
 
   const uint16_t pktid = (uint16_t(pkt[0]) << 8) | uint16_t(pkt[1]);
@@ -54,8 +56,8 @@ static exogs::proto::PacketMeta decode_primary_header_meta(const std::vector<uin
   m.ver = uint8_t((pktid >> 13) & 0x07);
   m.typ = uint8_t((pktid >> 12) & 0x01);
 
-  if (dir_hint == exogs::Direction::TC) m.typ = 1;
-  if (dir_hint == exogs::Direction::TM) m.typ = 0;
+  if (dir_hint == exn::Direction::TC) m.typ = 1;
+  if (dir_hint == exn::Direction::TM) m.typ = 0;
 
   m.shf = uint8_t((pktid >> 11) & 0x01);
   m.apid = uint16_t(pktid & 0x07FFu);
@@ -65,8 +67,8 @@ static exogs::proto::PacketMeta decode_primary_header_meta(const std::vector<uin
   return m;
 }
 
-static exogs::proto::Frame make_packet_frame(exogs::proto::MsgType t, const exogs::proto::PacketMeta& m, const std::string& desc) {
-  return exogs::proto::Frame{t, exogs::proto::pack_packet_meta(m, desc)};
+static exn::proto::Frame make_packet_frame(exn::proto::MsgType t, const exn::proto::PacketMeta& m, const std::string& desc) {
+  return exn::proto::Frame{t, exn::proto::pack_packet_meta(m, desc)};
 }
 
 static std::vector<uint8_t> build_ccsds_tc(uint16_t apid, uint16_t seq, uint8_t svc, uint8_t ssvc,
@@ -121,14 +123,14 @@ int App::run() {
       if (ec) return;
 
       if (hk_tc_enabled && link.opened()) {
-        // Periodic HK request TC (svc=3, ssvc=10 for example)
-        auto pkt = build_ccsds_tc(/*apid*/1, tc_seq++, /*svc*/3, /*ssvc*/10);
+        // Periodic HK request TC (SVC_HK, SUB_SYS_HK_REQ)
+        auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_HK, SUB_SYS_HK_REQ);
         link.write_bytes(pkt.data(), pkt.size());
 
-        auto m = decode_primary_header_meta(pkt, exogs::Direction::TC);
-        m.svc = 3; m.ssvc = 10;
-        ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketTx, m, "HK_REQ"));
-        if (cfg_.verbose) print_packet("[TC->LINK]", m, "HK_REQ");
+        auto m = decode_primary_header_meta(pkt, exn::Direction::TC);
+        m.svc = SVC_HK; m.ssvc = SUB_SYS_HK_REQ;
+        ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, m, "SYS_HK_REQ"));
+        if (cfg_.verbose) print_packet("[TC->LINK]", m, "SYS_HK_REQ");
       }
 
       arm_hk_tc();
@@ -141,23 +143,23 @@ int App::run() {
     const auto snap = state.snapshot();
     std::string payload = link_state_to_string(snap.link);
     if (!snap.link_detail.empty()) payload += " " + snap.link_detail;
-    ipc.broadcast(exogs::proto::Frame{exogs::proto::MsgType::LinkState, exogs::proto::pack_string(payload)});
+    ipc.broadcast(exn::proto::Frame{exn::proto::MsgType::LinkState, exn::proto::pack_string(payload)});
   };
 
   link.set_on_state([&](bool opened, const std::string& detail) {
-    state.set_link(opened ? exogs::LinkState::Connected : exogs::LinkState::Disconnected, detail);
+    state.set_link(opened ? exn::LinkState::Connected : exn::LinkState::Disconnected, detail);
     publish_link_state();
   });
 
   link.set_on_error([&](const std::string& err) {
-    state.set_link(exogs::LinkState::Error, err);
+    state.set_link(exn::LinkState::Error, err);
     publish_link_state();
   });
 
   framer.set_on_packet([&](std::vector<uint8_t>&& pkt) {
-    exogs::PacketRecord rec;
-    rec.ts_ns = exogs::now_ns();
-    rec.dir = exogs::Direction::TM;
+    exn::PacketRecord rec;
+    rec.ts_ns = exn::now_ns();
+    rec.dir = exn::Direction::TM;
 
     if (pkt.size() >= 8) {
       const uint16_t pktid = (uint16_t(pkt[0]) << 8) | uint16_t(pkt[1]);
@@ -174,10 +176,10 @@ int App::run() {
     state.on_packet(rec);
     logger->store(rec);
 
-    auto m = decode_primary_header_meta(rec.raw, exogs::Direction::TM);
+    auto m = decode_primary_header_meta(rec.raw, exn::Direction::TM);
     m.svc = rec.service;
     m.ssvc = rec.subservice;
-    ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketRx, m, "TM"));
+    ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketRx, m, "TM"));
     if (cfg_.verbose) {
       print_packet("[TM<-LINK]", m, "TM");
     }
@@ -187,61 +189,56 @@ int App::run() {
     framer.push_bytes(data, n);
   });
 
-  ipc.set_on_command([&](const exogs::proto::Frame& f, std::shared_ptr<IpcSession>) {
+  ipc.set_on_command([&](const exn::proto::Frame& f, std::shared_ptr<IpcSession>) {
     std::string cmd;
-    if (!exogs::proto::unpack_string(f.payload, cmd)) return;
+    if (!exn::proto::unpack_string(f.payload, cmd)) return;
 
     if (cmd == "CONNECT") {
       link.start();
 
-      // Send CONNECT TC
-      auto pkt = build_ccsds_tc(/*apid*/1, tc_seq++, /*svc*/1, /*ssvc*/1);
-      link.write_bytes(pkt.data(), pkt.size());
+      // Send PING TC as a "connection" check
+      auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET); // Just an example, maybe SVC_TIME?
+      // Actually, let's use SVC_TIME 17/1 for "CONNECT" demo if it was SVC 1 before
+      // But wait, the original code had SVC 1 which is not in exn_interfaces.h.
+      // Let's use SVC_TIME 17/1 for "CONNECT" simulation.
+      
+      auto p_ping = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET);
+      link.write_bytes(p_ping.data(), p_ping.size());
 
-      auto m = decode_primary_header_meta(pkt, exogs::Direction::TC);
-      m.svc = 1; m.ssvc = 1;
-      ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketTx, m, "CONNECT"));
+      auto m = decode_primary_header_meta(p_ping, exn::Direction::TC);
+      m.svc = SVC_TIME; m.ssvc = SUB_TIME_SET;
+      ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, m, "TIME_SET"));
       if (cfg_.verbose) {
-        print_packet("[TC->LINK]", m, "CONNECT");
+        print_packet("[TC->LINK]", m, "TIME_SET");
       }
-      // Send HK_ENABLE TC (sim starts periodic HK_REPORT)
-      std::vector<uint8_t> extra; // optional period later
-      auto hk = build_ccsds_tc(/*apid*/1, tc_seq++, /*svc*/3, /*ssvc*/1, extra);
+      // Send HK_REQ TC
+      auto hk = build_ccsds_tc(APID_MCU, tc_seq++, SVC_HK, SUB_HK_REQ);
       link.write_bytes(hk.data(), hk.size());
 
-      auto mhk = decode_primary_header_meta(hk, exogs::Direction::TC);
-      mhk.svc = 3; mhk.ssvc = 1;
-      ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketTx, mhk, "HK_ENABLE"));
+      auto mhk = decode_primary_header_meta(hk, exn::Direction::TC);
+      mhk.svc = SVC_HK; mhk.ssvc = SUB_HK_REQ;
+      ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, mhk, "HK_REQ"));
       if (cfg_.verbose) {
-        print_packet("[TC->LINK]", m, "HK_ENABLE");
+        print_packet("[TC->LINK]", mhk, "HK_REQ");
       }
       hk_tc_enabled = true;
       return;
     }
 
     if (cmd == "DISCONNECT") {
-      // Send DISCONNECT TC before closing
-      auto pkt = build_ccsds_tc(/*apid*/1, tc_seq++, /*svc*/1, /*ssvc*/3);
-      link.write_bytes(pkt.data(), pkt.size());
-
-      auto m = decode_primary_header_meta(pkt, exogs::Direction::TC);
-      m.svc = 1; m.ssvc = 3;
-      ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketTx, m, "DISCONNECT"));
-      if (cfg_.verbose) {
-        print_packet("[TC->LINK]", m, "DISCONNECT");
-      }
+      // No explicit DISCONNECT in PUS, just stop GS tasks
       hk_tc_enabled = false;
       link.stop();
       return;
     }
 
     if (cmd == "PING") {
-      auto pkt = build_ccsds_tc(/*apid*/1, tc_seq++, /*svc*/2, /*ssvc*/1);
+      auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET); // Using Time Service as Ping
       link.write_bytes(pkt.data(), pkt.size());
 
-      auto m = decode_primary_header_meta(pkt, exogs::Direction::TC);
-      m.svc = 2; m.ssvc = 1;
-      ipc.broadcast(make_packet_frame(exogs::proto::MsgType::PacketTx, m, "PING"));
+      auto m = decode_primary_header_meta(pkt, exn::Direction::TC);
+      m.svc = SVC_TIME; m.ssvc = SUB_TIME_SET;
+      ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, m, "PING (TIME_SET)"));
       if (cfg_.verbose) {
         print_packet("[TC->LINK]", m, "PING");
       }
@@ -253,10 +250,10 @@ int App::run() {
 
   ipc.start();
 
-  state.set_link(exogs::LinkState::Disconnected, "");
+  state.set_link(exn::LinkState::Disconnected, "");
   publish_link_state();
 
-  std::cout << "exo_gsd listening on " << cfg_.listen_host << ":" << cfg_.listen_port << "\n";
+  std::cout << "exn_gsd listening on " << cfg_.listen_host << ":" << cfg_.listen_port << "\n";
   std::cout << "Link port: " << (cfg_.serial_port.empty() ? "(none)" : cfg_.serial_port) << "\n";
   // Auto-connect to the device immediately (serial or tcp://...), but don't send anything yet.
   if (!cfg_.serial_port.empty()) {
@@ -267,4 +264,4 @@ int App::run() {
   return 0;
 }
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

@@ -1,7 +1,7 @@
-#include "exogs/ui/ui_app.hpp"
-#include "exogs/ui/ipc_client.hpp"
-#include "exogs/shared/protocol.hpp"
-#include "exogs/shared/time.hpp"
+#include "exn/ui/ui_app.hpp"
+#include "exn/ui/ipc_client.hpp"
+#include "exn/shared/protocol.hpp"
+#include "exn/shared/time.hpp"
 
 #include <boost/asio.hpp>
 
@@ -16,7 +16,7 @@
 #include <sstream>
 #include <thread>
 
-namespace exogs::ui {
+namespace exn::ui {
 
 static void trim_rows(std::deque<PacketRow>& q, size_t maxn) {
   while (q.size() > maxn) q.pop_front();
@@ -24,13 +24,13 @@ static void trim_rows(std::deque<PacketRow>& q, size_t maxn) {
 
 UiApp::UiApp(std::string host, uint16_t port) : host_(std::move(host)), port_(port) {}
 
-void UiApp::push_tc(const exogs::proto::PacketMeta& m, const std::string& desc) {
+void UiApp::push_tc(const exn::proto::PacketMeta& m, const std::string& desc) {
   std::lock_guard<std::mutex> lk(mtx_);
   tc_rows_.push_back(PacketRow{m, desc});
   trim_rows(tc_rows_, 5000);
 }
 
-void UiApp::push_tm(const exogs::proto::PacketMeta& m, const std::string& desc) {
+void UiApp::push_tm(const exn::proto::PacketMeta& m, const std::string& desc) {
   std::lock_guard<std::mutex> lk(mtx_);
   tm_rows_.push_back(PacketRow{m, desc});
   trim_rows(tm_rows_, 5000);
@@ -145,26 +145,26 @@ int UiApp::run() {
   boost::asio::io_context io;
   IpcClient client(io, host_, port_);
 
-  client.set_on_frame([this](const exogs::proto::Frame& f) {
+  client.set_on_frame([this](const exn::proto::Frame& f) {
     switch (f.type) {
-      case exogs::proto::MsgType::LinkState: {
+      case exn::proto::MsgType::LinkState: {
         std::string s;
-        if (!exogs::proto::unpack_string(f.payload, s)) return;
+        if (!exn::proto::unpack_string(f.payload, s)) return;
         std::lock_guard<std::mutex> lk(mtx_);
         link_line_ = s;
         break;
       }
-      case exogs::proto::MsgType::PacketRx: {
-        exogs::proto::PacketMeta m;
+      case exn::proto::MsgType::PacketRx: {
+        exn::proto::PacketMeta m;
         std::string desc;
-        if (!exogs::proto::unpack_packet_meta(f.payload, m, desc)) return;
+        if (!exn::proto::unpack_packet_meta(f.payload, m, desc)) return;
         push_tm(m, desc);
         break;
       }
-      case exogs::proto::MsgType::PacketTx: {
-        exogs::proto::PacketMeta m;
+      case exn::proto::MsgType::PacketTx: {
+        exn::proto::PacketMeta m;
         std::string desc;
-        if (!exogs::proto::unpack_packet_meta(f.payload, m, desc)) return;
+        if (!exn::proto::unpack_packet_meta(f.payload, m, desc)) return;
         push_tc(m, desc);
         break;
       }
@@ -219,11 +219,41 @@ int UiApp::run() {
     const std::string tc_text = render_packet_table_text(tc_rows, table_rows, term_w / 2);
     const std::string tm_text = render_packet_table_text(tm_rows, table_rows, term_w / 2);
 
+    auto topLinkName = vbox({
+      text("Deamon Link: "),
+      text("Device Link: ")
+    });
+    std::string link2 = "127.0.0.1:9000";
+    auto topLinkValue = vbox({
+      text( link) ,
+      text( link2)
+    });
+
+    auto link1col = color(Color::Green);
+    if (link == "DISCONNECTED") {
+      link1col = color(Color::Red);
+    }
+    auto link1col2 = color(Color::Green);
+    if (link2 == "DISCONNECTED") {
+      link1col2 = color(Color::Red);
+    }
+
+    auto topLinkStatus = vbox({
+      text("● ") | link1col,
+      text("● ") | link1col2,
+    });
+
+    auto topLinks = hbox({
+      topLinkStatus,
+      topLinkName,
+      topLinkValue
+    });
+
     auto top = hbox({
-      text("exo-gs") | bold,
+      text("exn-gs") | bold,
       filler(),
-      text("Link: " + link),
-    }) | border;
+      topLinks
+    });
 
     auto services_panel = hbox({
         text("Services: ") | bold,
@@ -233,7 +263,7 @@ int UiApp::run() {
         text("MEM ")|bold, text("●  ")|color(Color::Yellow), text(" | ") | bold,
         text("PAYLOAD ")|bold, text("●  ")|color(Color::Red), text(" | ") | bold,
         text("MODE ")|bold, text("●")|color(Color::Green)
-    }) | border;
+    });
 
     auto tc_panel = vbox({
       text("TCs (sent from GS)") | bold,
@@ -251,11 +281,11 @@ int UiApp::run() {
     Element cmd_bar = filler();
     if (cmd_mode) {
       cmd_bar = vbox({
-        text("CMD") | bold,
         separator(),
-        hbox({ text("> ") | bold, cmd_input_comp->Render() }) | border,
+        hbox({ text("CMD:/> ") | bold, cmd_input_comp->Render() }),
+        separator(),
         text("Enter=send   Esc=close   h=help") | color(Color::GrayLight),
-      }) | border;
+      });
     } else {
       cmd_bar = text("Keys: c=CMD   h=HELP   q=QUIT") | color(Color::GrayLight);
     }
@@ -361,4 +391,4 @@ int UiApp::run() {
   return 0;
 }
 
-} // namespace exogs::ui
+} // namespace exn::ui

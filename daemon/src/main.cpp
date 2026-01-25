@@ -1,4 +1,4 @@
-#include "exogs/daemon/app.hpp"
+#include "exn/daemon/app.hpp"
 #include <iostream>
 
 bool verbose = false;
@@ -13,7 +13,7 @@ static void print_usage(const char* exe) {
 }
 
 int main(int argc, char** argv) {
-  exogs::daemon::AppConfig cfg;
+  exn::daemon::AppConfig cfg;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -53,6 +53,6 @@ int main(int argc, char** argv) {
     }
   }
   cfg.verbose = verbose;
-  exogs::daemon::App app(cfg);
+  exn::daemon::App app(cfg);
   return app.run();
 }

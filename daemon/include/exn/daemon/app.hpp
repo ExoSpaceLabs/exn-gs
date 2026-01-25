@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 struct AppConfig {
   std::string listen_host = "127.0.0.1";
@@ -24,4 +24,4 @@ private:
   AppConfig cfg_;
 };
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

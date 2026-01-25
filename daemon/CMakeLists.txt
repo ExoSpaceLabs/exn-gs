@@ -1,6 +1,6 @@
 
 
-add_executable(exo_gsd
+add_executable(exn_gsd
   src/main.cpp
   src/app.cpp
   src/serial_link.cpp
@@ -9,13 +9,13 @@ add_executable(exo_gsd
   src/ipc_server.cpp
 )
 
-target_include_directories(exo_gsd PRIVATE
+target_include_directories(exn_gsd PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(exo_gsd PRIVATE
-  exogs_shared
+target_link_libraries(exn_gsd PRIVATE
+  exn_shared
   Boost::system
 )
 
-exogs_apply_warnings(exo_gsd)
+exn_apply_warnings(exn_gsd)

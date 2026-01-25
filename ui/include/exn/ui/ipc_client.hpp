@@ -5,13 +5,13 @@
 #include <string>
 #include <vector>
 
-#include "exogs/shared/protocol.hpp"
+#include "exn/shared/protocol.hpp"
 
-namespace exogs::ui {
+namespace exn::ui {
 
 class IpcClient {
 public:
-  using OnFrame = std::function<void(const exogs::proto::Frame&)>;
+  using OnFrame = std::function<void(const exn::proto::Frame&)>;
 
   IpcClient(boost::asio::io_context& io, std::string host, uint16_t port);
 
@@ -36,4 +36,4 @@ private:
   OnFrame on_frame_;
 };
 
-} // namespace exogs::ui
+} // namespace exn::ui

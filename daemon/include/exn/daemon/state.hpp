@@ -5,16 +5,16 @@
 #include <string>
 #include <unordered_map>
 
-#include "exogs/shared/types.hpp"
+#include "exn/shared/types.hpp"
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 struct ServiceStatus {
   uint64_t last_seen_ns = 0;
 };
 
 struct StateSnapshot {
-  exogs::LinkState link = exogs::LinkState::Disconnected;
+  exn::LinkState link = exn::LinkState::Disconnected;
   std::string link_detail;
 
   uint64_t rx_packets = 0;
@@ -29,20 +29,20 @@ class StateStore {
 public:
   explicit StateStore(size_t ring_capacity = 1000);
 
-  void set_link(exogs::LinkState st, std::string detail);
-  void on_packet(const exogs::PacketRecord& rec);
+  void set_link(exn::LinkState st, std::string detail);
+  void on_packet(const exn::PacketRecord& rec);
   void on_decode_error();
   void on_framing_error();
 
   StateSnapshot snapshot() const;
-  std::deque<exogs::PacketRecord> last_packets(size_t n) const;
+  std::deque<exn::PacketRecord> last_packets(size_t n) const;
 
 private:
   const size_t cap_;
   mutable std::mutex mtx_;
 
   StateSnapshot snap_;
-  std::deque<exogs::PacketRecord> ring_;
+  std::deque<exn::PacketRecord> ring_;
 };
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

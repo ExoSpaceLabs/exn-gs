@@ -1,13 +1,13 @@
-add_library(exogs_shared
+add_library(exn_shared
   src/protocol.cpp
   src/time.cpp
   src/framer.cpp
 )
 
-target_include_directories(exogs_shared PUBLIC
+target_include_directories(exn_shared PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(exogs_shared PUBLIC Boost::system)
+target_link_libraries(exn_shared PUBLIC Boost::system)
 
-exogs_apply_warnings(exogs_shared)
+exn_apply_warnings(exn_shared)

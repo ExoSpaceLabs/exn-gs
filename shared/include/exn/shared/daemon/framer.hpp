@@ -4,7 +4,7 @@
 #include <functional>
 #include <vector>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 // CCSDS Space Packet framer for primary header length field.
 // It extracts full packets from a byte stream using the Packet Length field.
@@ -24,4 +24,4 @@ private:
   uint64_t framing_errors_ = 0;
 };
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

@@ -1,7 +1,7 @@
-#include "exogs/daemon/ipc_server.hpp"
+#include "exn/daemon/ipc_server.hpp"
 #include <iostream>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 IpcServer::IpcServer(boost::asio::io_context& io, const std::string& host, uint16_t port)
   : io_(io),
@@ -32,7 +32,7 @@ void IpcServer::do_accept() {
   });
 }
 
-void IpcServer::broadcast(const exogs::proto::Frame& f) {
+void IpcServer::broadcast(const exn::proto::Frame& f) {
   std::lock_guard<std::mutex> lk(mtx_);
   for (auto it = sessions_.begin(); it != sessions_.end();) {
     if (auto s = it->lock()) {
@@ -51,11 +51,11 @@ IpcSession::IpcSession(boost::asio::ip::tcp::socket sock, IpcServer& owner)
 
 void IpcSession::start() {
   do_read();
-  send(exogs::proto::Frame{exogs::proto::MsgType::Hello, exogs::proto::pack_string("exo_gsd")});
+  send(exn::proto::Frame{exn::proto::MsgType::Hello, exn::proto::pack_string("exn_gsd")});
 }
 
-void IpcSession::send(const exogs::proto::Frame& f) {
-  auto bytes = std::make_shared<std::vector<uint8_t>>(exogs::proto::encode(f));
+void IpcSession::send(const exn::proto::Frame& f) {
+  auto bytes = std::make_shared<std::vector<uint8_t>>(exn::proto::encode(f));
   auto self = shared_from_this();
   boost::asio::async_write(sock_, boost::asio::buffer(*bytes),
     [self, bytes](const boost::system::error_code& /*ec*/, std::size_t /*n*/) {
@@ -72,10 +72,10 @@ void IpcSession::do_read() {
       }
       rxbuf_.insert(rxbuf_.end(), tmp_.data(), tmp_.data() + n);
 
-      exogs::proto::Frame f;
-      while (exogs::proto::try_decode(rxbuf_, f)) {
+      exn::proto::Frame f;
+      while (exn::proto::try_decode(rxbuf_, f)) {
         if (owner_.on_command_) {
-          if (f.type == exogs::proto::MsgType::Command || f.type == exogs::proto::MsgType::Query) {
+          if (f.type == exn::proto::MsgType::Command || f.type == exn::proto::MsgType::Query) {
             owner_.on_command_(f, self);
           }
         }
@@ -85,4 +85,4 @@ void IpcSession::do_read() {
     });
 }
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

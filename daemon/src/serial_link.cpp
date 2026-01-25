@@ -1,7 +1,7 @@
-#include "exogs/daemon/serial_link.hpp"
+#include "exn/daemon/serial_link.hpp"
 #include <iostream>
 
-namespace exogs::daemon {
+namespace exn::daemon {
 using boost::asio::ip::tcp;
 
 static bool parse_tcp_uri(const std::string& s, std::string& host, uint16_t& port) {
@@ -168,4 +168,4 @@ void SerialLink::flush_pending() {
 }
 
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

@@ -5,20 +5,20 @@
 #include <mutex>
 #include <vector>
 
-#include "exogs/shared/protocol.hpp"
+#include "exn/shared/protocol.hpp"
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 class IpcSession;
 
 class IpcServer {
 public:
-  using OnCommand = std::function<void(const exogs::proto::Frame&, std::shared_ptr<IpcSession>)>;
+  using OnCommand = std::function<void(const exn::proto::Frame&, std::shared_ptr<IpcSession>)>;
 
   IpcServer(boost::asio::io_context& io, const std::string& host, uint16_t port);
 
   void start();
-  void broadcast(const exogs::proto::Frame& f);
+  void broadcast(const exn::proto::Frame& f);
 
   void set_on_command(OnCommand cb) { on_command_ = std::move(cb); }
 
@@ -40,7 +40,7 @@ public:
   IpcSession(boost::asio::ip::tcp::socket sock, IpcServer& owner);
 
   void start();
-  void send(const exogs::proto::Frame& f);
+  void send(const exn::proto::Frame& f);
 
 private:
   void do_read();
@@ -52,4 +52,4 @@ private:
   std::array<uint8_t, 2048> tmp_{};
 };
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

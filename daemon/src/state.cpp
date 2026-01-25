@@ -1,16 +1,16 @@
-#include "exogs/daemon/state.hpp"
+#include "exn/daemon/state.hpp"
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 StateStore::StateStore(size_t ring_capacity) : cap_(ring_capacity) {}
 
-void StateStore::set_link(exogs::LinkState st, std::string detail) {
+void StateStore::set_link(exn::LinkState st, std::string detail) {
   std::lock_guard<std::mutex> lk(mtx_);
   snap_.link = st;
   snap_.link_detail = std::move(detail);
 }
 
-void StateStore::on_packet(const exogs::PacketRecord& rec) {
+void StateStore::on_packet(const exn::PacketRecord& rec) {
   std::lock_guard<std::mutex> lk(mtx_);
   snap_.rx_packets++;
   snap_.rx_bytes += rec.raw.size();
@@ -35,10 +35,10 @@ StateSnapshot StateStore::snapshot() const {
   return snap_;
 }
 
-std::deque<exogs::PacketRecord> StateStore::last_packets(size_t n) const {
+std::deque<exn::PacketRecord> StateStore::last_packets(size_t n) const {
   std::lock_guard<std::mutex> lk(mtx_);
   if (n >= ring_.size()) return ring_;
-  return std::deque<exogs::PacketRecord>(ring_.end() - static_cast<long>(n), ring_.end());
+  return std::deque<exn::PacketRecord>(ring_.end() - static_cast<long>(n), ring_.end());
 }
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

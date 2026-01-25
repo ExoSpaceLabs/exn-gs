@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace exogs {
+namespace exn {
 
 enum class Direction : uint8_t { TC = 0, TM = 1 };
 
@@ -20,4 +20,4 @@ struct PacketRecord {
   std::vector<uint8_t> raw;
 };
 
-} // namespace exogs
+} // namespace exn

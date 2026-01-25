@@ -5,16 +5,16 @@
 #include <string>
 #include <unordered_map>
 
-#include "exogs/shared/protocol.hpp"
+#include "exn/shared/protocol.hpp"
 
-namespace exogs::ui {
+namespace exn::ui {
 
   struct UiServiceStatus {
     uint64_t last_seen_ns = 0;
   };
 
   struct PacketRow {
-    exogs::proto::PacketMeta m;
+    exn::proto::PacketMeta m;
     std::string desc;
   };
 
@@ -35,8 +35,8 @@ namespace exogs::ui {
     std::deque<PacketRow> tc_rows_;
     std::deque<PacketRow> tm_rows_;
 
-    void push_tc(const exogs::proto::PacketMeta& m, const std::string& desc);
-    void push_tm(const exogs::proto::PacketMeta& m, const std::string& desc);
+    void push_tc(const exn::proto::PacketMeta& m, const std::string& desc);
+    void push_tm(const exn::proto::PacketMeta& m, const std::string& desc);
   };
 
-} // namespace exogs::ui
+} // namespace exn::ui

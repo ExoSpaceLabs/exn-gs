@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace exogs::proto {
+namespace exn::proto {
 
   enum class MsgType : uint16_t {
     Hello = 1,
@@ -67,4 +67,4 @@ namespace exogs::proto {
   std::vector<uint8_t> pack_packet_meta(const PacketMeta& m, const std::string& desc);
   bool unpack_packet_meta(const std::vector<uint8_t>& p, PacketMeta& m, std::string& desc);
 
-} // namespace exogs::proto
+} // namespace exn::proto

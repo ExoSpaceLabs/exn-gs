@@ -1,6 +1,8 @@
 #include "hardrtpp.hpp"
 
-#include "exogs/shared/daemon/framer.hpp"
+#include "exn/shared/daemon/framer.hpp"
+
+#include "exn/shared/exn_interfaces.h"
 
 #include <boost/asio.hpp>
 
@@ -87,7 +89,7 @@ static std::shared_ptr<tcp::socket> g_sock;
 // Forward declarations
 // --------------------
 static void start_session();
-static void start_async_read(std::shared_ptr<exogs::daemon::CcsdsFramer> framer);
+static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer);
 static void tc_dispatch_task(void*);
 static void tm_tx_task(void*);
 
@@ -132,7 +134,7 @@ static std::vector<uint8_t> build_tm(uint16_t apid, uint16_t seq, uint8_t svc, u
 // --------------------
 static void start_session() {
   g_sock = std::make_shared<tcp::socket>(*g_io);
-  auto framer = std::make_shared<exogs::daemon::CcsdsFramer>();
+  auto framer = std::make_shared<exn::daemon::CcsdsFramer>();
 
   framer->set_on_packet([](std::vector<uint8_t>&& pkt) {
     if (pkt.size() < 8) return;
@@ -170,7 +172,7 @@ static void start_session() {
   });
 }
 
-static void start_async_read(std::shared_ptr<exogs::daemon::CcsdsFramer> framer) {
+static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer) {
   static std::array<uint8_t, 2048> rxbuf{};
 
   g_sock->async_read_some(
@@ -216,32 +218,20 @@ static void tc_dispatch_task(void*) {
     }
 
     // SIM responds only to requests.
-    if (tc.svc == 1 && tc.ssvc == 1) {               // CONNECT
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 1, 2)});
+    if (tc.svc == SVC_TIME && tc.ssvc == SUB_TIME_SET) {               // PING / TIME_SET
+      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_TIME, SUB_TIME_REPORT)});
       continue;
     }
-    if (tc.svc == 1 && tc.ssvc == 3) {               // DISCONNECT
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 1, 4)});
+    if (tc.svc == SVC_HK && tc.ssvc == SUB_HK_REQ) {                  // HK_REQ
+      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_HK, SUB_HK_REPORT)});
       continue;
     }
-    if (tc.svc == 2 && tc.ssvc == 1) {               // PING REQ
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 2, 2)});
-      continue;
-    }
-    if (tc.svc == 3 && tc.ssvc == 10) {              // HK_REQ
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 3, 25)});
-      continue;
-    }
-    if (tc.svc == 3 && tc.ssvc == 1) {               // HK_ENABLE -> ACK
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 3, 2)});
-      continue;
-    }
-    if (tc.svc == 3 && tc.ssvc == 2) {               // HK_DISABLE -> ACK
-      g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, 3, 3)});
+    if (tc.svc == SVC_HK && tc.ssvc == SUB_SYS_HK_REQ) {              // SYS_HK_REQ
+      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT)});
       continue;
     }
 
-    g_tm_q.push_blocking({build_tm(tc.apid, tm_seq++, tc.svc, 0xFE)});
+    g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, tc.svc, 0xFE)});
   }
 }
 

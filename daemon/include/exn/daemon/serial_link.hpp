@@ -8,7 +8,7 @@
 #include <memory>
 
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
   // Byte-stream link that can be:
   // - real serial: /dev/ttyACM0
@@ -61,4 +61,4 @@ namespace exogs::daemon {
     OnState on_state_;
   };
 
-} // namespace exogs::daemon
+} // namespace exn::daemon

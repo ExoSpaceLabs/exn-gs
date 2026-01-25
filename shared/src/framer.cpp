@@ -1,6 +1,6 @@
-#include "exogs/shared/daemon/framer.hpp"
+#include "exn/shared/daemon/framer.hpp"
 
-namespace exogs::daemon {
+namespace exn::daemon {
 
 void CcsdsFramer::push_bytes(const uint8_t* data, size_t n) {
   if (!data || n == 0) return;
@@ -32,4 +32,4 @@ void CcsdsFramer::push_bytes(const uint8_t* data, size_t n) {
   }
 }
 
-} // namespace exogs::daemon
+} // namespace exn::daemon
