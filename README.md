@@ -6,6 +6,7 @@ Ground Segment TUI + daemon for STM32 CCSDS packets.
 
 The `exn-gs` project provides a modular ground segment for communicating with STM32-based satellite systems using CCSDS packets over PUS (Packet Utilization Standard).
 
+![tui_window.png](docs/images/tui_window.png)
 ### Architecture
 
 ```mermaid
