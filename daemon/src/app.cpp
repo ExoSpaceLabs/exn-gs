@@ -54,8 +54,9 @@ static exn::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8
   if (bytes.size() < 6) return m;
 
   CCSDS::Packet pkt;
+  pkt.setUpdatePacketEnable(false);
   // We don't know if it's PusA or not yet, but try it.
-  if (const auto exp = pkt.deserialize(bytes, "PusA"); !exp.has_value()) {
+  if (const auto exp = pkt.deserialize(bytes); !exp.has_value()) {
       std::cout <<"[EXN - Daemon] CCSDS Packet Deserialize fail PUS-A: " << exp.error().message() << std::endl;
     // Fallback if not PusA or something else
     if (const auto expFallback = pkt.deserialize(bytes); !expFallback.has_value()) {
@@ -77,11 +78,13 @@ static exn::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8
   m.len = header.getDataLength();
 
   if (m.shf) {
-    if (const auto sec = pkt.getDataField().getSecondaryHeader(); sec && sec->getType() == "PusA") {
-      const auto pus_a = std::static_pointer_cast<PusA>(sec);
-      m.svc = pus_a->getServiceType();
-      m.ssvc = pus_a->getServiceSubtype();
+    PusA pus_a;
+    if (auto exp = pus_a.deserialize(pkt.getApplicationDataBytes()); !exp.has_value()) {
+      std::cout <<"[EXN - Daemon] CCSDS Packet Deserialize fail PUS-A: " << exp.error().message() << std::endl;
     }
+    m.svc = pus_a.getServiceType();
+    m.ssvc = pus_a.getServiceSubtype();
+
   }
 
   return m;
@@ -127,13 +130,6 @@ static std::vector<uint8_t> build_ccsds_tc(uint16_t apid, uint16_t seq, uint8_t 
     printf("%hu ", static_cast<uint8_t>(b));
   }
   printf("\n");
-
-  CCSDS::Packet testPacket;
-  testPacket.setUpdatePacketEnable(false);
-  if (auto exp = testPacket.deserialize(buff); !exp.has_value()) {
-    std::cout << "[EXN daemon] Test Packet generation error: " << exp.error().message() << std::endl;
-  }
-  std::printf("[EXN daemon] Test Packet header: %lu \n",testPacket.getPrimaryHeader64bit());
 
   return buff;
 }
@@ -201,17 +197,17 @@ int App::run() {
     rec.dir = exn::Direction::TM;
 
     CCSDS::Packet pkt;
-    pkt.RegisterSecondaryHeader<PusA>();
-    if (pkt.deserialize(bytes, "PusA").has_value() || pkt.deserialize(bytes).has_value()) {
+    pkt.setUpdatePacketEnable(false);
+    if (pkt.deserialize(bytes).has_value()) {
+
       auto& header = pkt.getPrimaryHeader();
       rec.apid = header.getAPID();
       rec.seq = header.getSequenceCount();
       if (header.getDataFieldHeaderFlag()) {
-        auto sec = pkt.getDataField().getSecondaryHeader();
-        if (sec && sec->getType() == "PusA") {
-          auto pus_a = std::static_pointer_cast<PusA>(sec);
-          rec.service = pus_a->getServiceType();
-          rec.subservice = pus_a->getServiceSubtype();
+        PusA pus_a;
+        if (pus_a.deserialize(pkt.getApplicationDataBytes()).has_value()) {
+          rec.service = pus_a.getServiceType();
+          rec.subservice = pus_a.getServiceSubtype();
         }
       }
     }
