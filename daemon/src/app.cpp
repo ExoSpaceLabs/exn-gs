@@ -1,3 +1,7 @@
+#include <CCSDSHeader.h>
+#include <CCSDSPacket.h>
+#include <PusServices.h>
+
 #include "exn/daemon/app.hpp"
 #include "exn/daemon/ipc_server.hpp"
 #include "exn/daemon/serial_link.hpp"
@@ -44,26 +48,42 @@ static std::string link_state_to_string(exn::LinkState s) {
 
 App::App(AppConfig cfg) : cfg_(std::move(cfg)) {}
 
-static exn::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8_t>& pkt, exn::Direction dir_hint) {
+static exn::proto::PacketMeta decode_primary_header_meta(const std::vector<uint8_t>& bytes, exn::Direction dir_hint) {
   exn::proto::PacketMeta m;
   m.ts_ns = exn::now_ns();
-  if (pkt.size() < 6) return m;
+  if (bytes.size() < 6) return m;
 
-  const uint16_t pktid = (uint16_t(pkt[0]) << 8) | uint16_t(pkt[1]);
-  const uint16_t seq = (uint16_t(pkt[2]) << 8) | uint16_t(pkt[3]);
-  const uint16_t len = (uint16_t(pkt[4]) << 8) | uint16_t(pkt[5]);
+  CCSDS::Packet pkt;
+  // We don't know if it's PusA or not yet, but try it.
+  if (const auto exp = pkt.deserialize(bytes, "PusA"); !exp.has_value()) {
+      std::cout <<"[EXN - Daemon] CCSDS Packet Deserialize fail PUS-A: " << exp.error().message() << std::endl;
+    // Fallback if not PusA or something else
+    if (const auto expFallback = pkt.deserialize(bytes); !expFallback.has_value()) {
+      std::cout <<"[EXN - Daemon] CCSDS Packet Deserialize fail PUS-A: " << expFallback.error().message() << std::endl;
+    }
+  }
 
-  m.ver = uint8_t((pktid >> 13) & 0x07);
-  m.typ = uint8_t((pktid >> 12) & 0x01);
+  const auto& header = pkt.getPrimaryHeader();
+  m.ver = header.getVersionNumber();
+  m.typ = header.getType();
 
   if (dir_hint == exn::Direction::TC) m.typ = 1;
   if (dir_hint == exn::Direction::TM) m.typ = 0;
 
-  m.shf = uint8_t((pktid >> 11) & 0x01);
-  m.apid = uint16_t(pktid & 0x07FFu);
-  m.seqf = uint8_t((seq >> 14) & 0x03);
-  m.seq = uint16_t(seq & 0x3FFFu);
-  m.len = len;
+  m.shf = header.getDataFieldHeaderFlag();
+  m.apid = header.getAPID();
+  m.seqf = header.getSequenceFlags();
+  m.seq = header.getSequenceCount();
+  m.len = header.getDataLength();
+
+  if (m.shf) {
+    if (const auto sec = pkt.getDataField().getSecondaryHeader(); sec && sec->getType() == "PusA") {
+      const auto pus_a = std::static_pointer_cast<PusA>(sec);
+      m.svc = pus_a->getServiceType();
+      m.ssvc = pus_a->getServiceSubtype();
+    }
+  }
+
   return m;
 }
 
@@ -73,33 +93,49 @@ static exn::proto::Frame make_packet_frame(exn::proto::MsgType t, const exn::pro
 
 static std::vector<uint8_t> build_ccsds_tc(uint16_t apid, uint16_t seq, uint8_t svc, uint8_t ssvc,
                                            const std::vector<uint8_t>& extra = {}) {
-  const uint16_t ver = 0;
-  const uint16_t typ = 1;
-  const uint16_t shf = 1;
+  CCSDS::Packet pkt;
+  pkt.setUpdatePacketEnable(true);
 
-  const uint16_t pktid = uint16_t((ver & 0x7) << 13) | uint16_t((typ & 0x1) << 12) |
-                         uint16_t((shf & 0x1) << 11) | uint16_t(apid & 0x07FF);
+  auto& header = pkt.getPrimaryHeader();
+  header.setVersionNumber(0);
+  header.setType(1); // TC
+  header.setDataFieldHeaderFlag(1); // secondary header present
+  header.setAPID(apid);
+  header.setSequenceFlags(CCSDS::ESequenceFlag::UNSEGMENTED);
+  header.setSequenceCount(seq);
 
-  const uint16_t seqf = 3; // standalone
-  const uint16_t seqctl = uint16_t((seqf & 0x3) << 14) | uint16_t(seq & 0x3FFF);
 
-  const size_t payload_sz = 2 + extra.size();
-  const uint16_t ccsds_len = uint16_t(payload_sz - 1);
+  // PusA(version, serviceType, serviceSubtype, sourceID, dataLength)
+  const auto pus_hdr = std::make_shared<PusA>(1, svc, ssvc, SRCID_GS, static_cast<uint32_t>(extra.size()));
+  pkt.setDataFieldHeader(pus_hdr);
+  if (!extra.empty()) {
+    if (const auto exp = pkt.setApplicationData(extra); !exp.has_value()) {
+      std::cout << "exn_gsd Packet generation error: " << exp.error().message() << std::endl;
+    }
+  }
+  if (pkt.getPrimaryHeader().getType() != 1) {
+    std::cout << "[EXN daemon] Packet Header malformed, Type is not 1 (TC)." << std::endl;
+  }
+  std::printf("[EXN daemon] Packet header: %lu \n",pkt.getPrimaryHeader64bit());
+  std::fflush(stdout);
 
-  std::vector<uint8_t> pkt;
-  pkt.reserve(6 + payload_sz);
+  auto buff = pkt.serialize();
 
-  pkt.push_back(uint8_t(pktid >> 8));
-  pkt.push_back(uint8_t(pktid & 0xFF));
-  pkt.push_back(uint8_t(seqctl >> 8));
-  pkt.push_back(uint8_t(seqctl & 0xFF));
-  pkt.push_back(uint8_t(ccsds_len >> 8));
-  pkt.push_back(uint8_t(ccsds_len & 0xFF));
+  std::cout << "[EXN daemon] DBG ccsds packet length: " << buff.size() << std::endl;
+  std::printf("[EXN daemon] Data out: ");
+  for (const auto b : buff) {
+    printf("%hu ", static_cast<uint8_t>(b));
+  }
+  printf("\n");
 
-  pkt.push_back(svc);
-  pkt.push_back(ssvc);
-  pkt.insert(pkt.end(), extra.begin(), extra.end());
-  return pkt;
+  CCSDS::Packet testPacket;
+  testPacket.setUpdatePacketEnable(false);
+  if (auto exp = testPacket.deserialize(buff); !exp.has_value()) {
+    std::cout << "[EXN daemon] Test Packet generation error: " << exp.error().message() << std::endl;
+  }
+  std::printf("[EXN daemon] Test Packet header: %lu \n",testPacket.getPrimaryHeader64bit());
+
+  return buff;
 }
 
 int App::run() {
@@ -125,6 +161,9 @@ int App::run() {
       if (hk_tc_enabled && link.opened()) {
         // Periodic HK request TC (SVC_HK, SUB_SYS_HK_REQ)
         auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_HK, SUB_SYS_HK_REQ);
+        if (pkt.size() < 8) {
+          std::cout << "[EXN Daemon] Error: size cannot be less than 8, created: "<< pkt.size() << std::endl;
+        }
         link.write_bytes(pkt.data(), pkt.size());
 
         auto m = decode_primary_header_meta(pkt, exn::Direction::TC);
@@ -156,22 +195,29 @@ int App::run() {
     publish_link_state();
   });
 
-  framer.set_on_packet([&](std::vector<uint8_t>&& pkt) {
+  framer.set_on_packet([&](std::vector<uint8_t>&& bytes) {
     exn::PacketRecord rec;
     rec.ts_ns = exn::now_ns();
     rec.dir = exn::Direction::TM;
 
-    if (pkt.size() >= 8) {
-      const uint16_t pktid = (uint16_t(pkt[0]) << 8) | uint16_t(pkt[1]);
-      const uint16_t seqc = (uint16_t(pkt[2]) << 8) | uint16_t(pkt[3]);
-      rec.apid = pktid & 0x07FFu;
-      rec.seq = seqc & 0x3FFFu;
-      rec.service = pkt[6];
-      rec.subservice = pkt[7];
+    CCSDS::Packet pkt;
+    pkt.RegisterSecondaryHeader<PusA>();
+    if (pkt.deserialize(bytes, "PusA").has_value() || pkt.deserialize(bytes).has_value()) {
+      auto& header = pkt.getPrimaryHeader();
+      rec.apid = header.getAPID();
+      rec.seq = header.getSequenceCount();
+      if (header.getDataFieldHeaderFlag()) {
+        auto sec = pkt.getDataField().getSecondaryHeader();
+        if (sec && sec->getType() == "PusA") {
+          auto pus_a = std::static_pointer_cast<PusA>(sec);
+          rec.service = pus_a->getServiceType();
+          rec.subservice = pus_a->getServiceSubtype();
+        }
+      }
     }
 
     rec.summary = "RX";
-    rec.raw = std::move(pkt);
+    rec.raw = std::move(bytes);
 
     state.on_packet(rec);
     logger->store(rec);
@@ -193,55 +239,42 @@ int App::run() {
     std::string cmd;
     if (!exn::proto::unpack_string(f.payload, cmd)) return;
 
-    if (cmd == "CONNECT") {
-      link.start();
+    if (cmd == "CONNECT" || cmd == "ping") {
+      if (cmd == "CONNECT") link.start();
 
       // Send PING TC as a "connection" check
-      auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET); // Just an example, maybe SVC_TIME?
-      // Actually, let's use SVC_TIME 17/1 for "CONNECT" demo if it was SVC 1 before
-      // But wait, the original code had SVC 1 which is not in exn_interfaces.h.
-      // Let's use SVC_TIME 17/1 for "CONNECT" simulation.
-      
-      auto p_ping = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET);
-      link.write_bytes(p_ping.data(), p_ping.size());
+      auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET);
+      link.write_bytes(pkt.data(), pkt.size());
 
-      auto m = decode_primary_header_meta(p_ping, exn::Direction::TC);
+      auto m = decode_primary_header_meta(pkt, exn::Direction::TC);
       m.svc = SVC_TIME; m.ssvc = SUB_TIME_SET;
       ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, m, "TIME_SET"));
       if (cfg_.verbose) {
         print_packet("[TC->LINK]", m, "TIME_SET");
       }
-      // Send HK_REQ TC
-      auto hk = build_ccsds_tc(APID_MCU, tc_seq++, SVC_HK, SUB_HK_REQ);
-      link.write_bytes(hk.data(), hk.size());
+      
+      if (cmd == "CONNECT") {
+          // Send HK_REQ TC
+          auto hk = build_ccsds_tc(APID_MCU, tc_seq++, SVC_HK, SUB_HK_REQ);
+          if (hk.size() < 8) {
+            std::cout << "[EXN Daemon] Error: size cannot be less than 8, created: "<< hk.size() << std::endl;
+          }
+          link.write_bytes(hk.data(), hk.size());
 
-      auto mhk = decode_primary_header_meta(hk, exn::Direction::TC);
-      mhk.svc = SVC_HK; mhk.ssvc = SUB_HK_REQ;
-      ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, mhk, "HK_REQ"));
-      if (cfg_.verbose) {
-        print_packet("[TC->LINK]", mhk, "HK_REQ");
+          auto mhk = decode_primary_header_meta(hk, exn::Direction::TC);
+          mhk.svc = SVC_HK; mhk.ssvc = SUB_HK_REQ;
+          ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, mhk, "HK_REQ"));
+          if (cfg_.verbose) {
+            print_packet("[TC->LINK]", mhk, "HK_REQ");
+          }
+          hk_tc_enabled = true;
       }
-      hk_tc_enabled = true;
       return;
     }
 
     if (cmd == "DISCONNECT") {
-      // No explicit DISCONNECT in PUS, just stop GS tasks
       hk_tc_enabled = false;
       link.stop();
-      return;
-    }
-
-    if (cmd == "PING") {
-      auto pkt = build_ccsds_tc(APID_MCU, tc_seq++, SVC_TIME, SUB_TIME_SET); // Using Time Service as Ping
-      link.write_bytes(pkt.data(), pkt.size());
-
-      auto m = decode_primary_header_meta(pkt, exn::Direction::TC);
-      m.svc = SVC_TIME; m.ssvc = SUB_TIME_SET;
-      ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, m, "PING (TIME_SET)"));
-      if (cfg_.verbose) {
-        print_packet("[TC->LINK]", m, "PING");
-      }
       return;
     }
 

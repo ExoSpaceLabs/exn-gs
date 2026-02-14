@@ -16,6 +16,7 @@ target_include_directories(exn_gsd PRIVATE
 target_link_libraries(exn_gsd PRIVATE
   exn_shared
   Boost::system
+  ccsdspack::CCSDSPack
 )
 
 exn_apply_warnings(exn_gsd)
