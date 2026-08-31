@@ -4,8 +4,6 @@ include(ExternalProject)
 
 set(HARDRT_INSTALL_DIR ${CMAKE_BINARY_DIR}/_deps/hardrt-install)
 
-# If you already have this ExternalProject in place, keep it.
-# Otherwise, uncomment and use this block.
 ExternalProject_Add(hardrt_ep
         GIT_REPOSITORY https://github.com/ExoSpaceLabs/hardrt.git
         GIT_TAG main
@@ -20,6 +18,8 @@ ExternalProject_Add(hardrt_ep
         -DHARDRT_ENABLE_CPP=ON
         -DHARDRT_BUILD_EXAMPLES=OFF
         -DHARDRT_BUILD_TESTS=OFF
+
+        BUILD_BYPRODUCTS ${HARDRT_INSTALL_DIR}/lib/libhardrt.a
 )
 
 file(MAKE_DIRECTORY ${HARDRT_INSTALL_DIR}/include)
@@ -34,6 +34,8 @@ set_target_properties(hardrt PROPERTIES
 add_executable(stm32_sim
         src/main.cpp
 )
+
+add_dependencies(stm32_sim hardrt_ep)
 
 target_link_libraries(stm32_sim PRIVATE
         hardrt

@@ -1,141 +1,191 @@
 # EXN-GS
 
-**EXN-GS** is the ground-control and hardware-in-the-loop environment for the EXN satellite-avionics demonstrator. It provides a C++17 daemon, terminal UI, command-line control tool, and STM32-oriented simulator for exercising CCSDS/PUS command and telemetry flows over Serial or TCP links.
+**EXN-GS** is the host-side ground-control and hardware-in-the-loop environment for the EXN avionics demonstrator. It provides a C++17 transport daemon, FTXUI operator client, command-line client, and STM32-oriented simulator for CCSDS/PUS traffic over Serial or TCP.
 
-> [!IMPORTANT]
-> **Modernization status — 2026-08-31:** EXN-GS currently depends on the pre-v2 CCSDSPack integration model. Its fallback dependency configuration contains a developer-local absolute path, so a clean checkout is not reproducible unless a compatible CCSDSPack package is already installed. Migration to the released **CCSDSPack 2.x** package/API contract is tracked in [issue #2](https://github.com/ExoSpaceLabs/exn-gs/issues/2).
+## Current protocol baseline
 
-## Scope
+This branch targets the EXN CCSDSPack v2 wire profile:
 
-EXN-GS is intended to provide a host-side integration boundary for EXN flight/payload software:
+- CCSDSPack v2.x, with v2.0.0 as the reproducible fallback baseline;
+- CCSDS Space Packet version 0;
+- PUS revision A TC/TM secondary headers;
+- one-octet TC source ID and zero-octet TM destination ID;
+- CRC-16/CCITT-FALSE packet error control;
+- TC APID = destination endpoint;
+- TM APID = producing endpoint.
 
-- command uplink and telemetry downlink;
-- CCSDS packet framing and PUS packet handling;
-- Serial and TCP device/simulator links;
-- daemon-owned connection and state management;
-- terminal-based monitoring and command entry;
-- command-line automation/control;
-- an STM32 communication simulator for development without physical hardware.
-
-SpaceWire/SpWKit is **not currently an EXN-GS dependency**. If a SpaceWire transport is adopted later, it should be introduced as a separate, tested transport backend rather than implied by the current Serial/TCP implementation.
+The mission wire contract is maintained in the `ExoSpaceLabs/exn` repository under `docs/ICD.md` and `interfaces/`.
 
 ## Architecture
 
 ```mermaid
-graph TD
-    UI[exn_gsui - Terminal UI] -- TCP/IPC:7777 --> Daemon[exn_gsd - GS Daemon]
-    CTL[exn_gsdctl - Control Tool] -- TCP/IPC:7777 --> Daemon
-    Daemon -- TCP --> SIM[stm32_sim - Satellite Simulator]
-    Daemon -- Serial --> HW[Physical STM32 / device]
-
-    subgraph "Ground Segment"
-        Daemon
-        UI
-        CTL
-    end
+graph LR
+    UI[exn_gsui\noperator/client tasks] -->|local IPC| D[exn_gsd\ntransport/router]
+    CLI[exn_gsdctl\nautomation/raw packets] -->|local IPC| D
+    D -->|TCP| SIM[stm32_sim\nv2 endpoint simulator]
+    D -->|Serial| HW[Physical MCU/device]
 ```
+
+The responsibility boundary is deliberate:
+
+### `exn_gsd`: transport/router
+
+The daemon owns:
+
+- Serial/TCP device-link lifecycle;
+- CCSDS byte-stream framing;
+- structurally validating packet boundaries before forwarding;
+- raw Space Packet routing between local clients and the device link;
+- packet metadata/logging/state distribution over local IPC.
+
+The daemon does **not** own mission schedules, periodically generate housekeeping, assign TC sequence numbers, synthesize time packets, or decide which application services should run.
+
+`PING` is therefore only an IPC/link-state liveness check. It does not send a mission packet.
+
+### `exn_gsui`: operator/application client
+
+The UI owns operator/application behavior, including:
+
+- CCSDSPack v2 packet construction;
+- client-side packet sequence state;
+- System HK transaction IDs;
+- the optional periodic System HK task;
+- one-shot mission requests initiated by the operator.
+
+Current System HK behavior sends TC `3/10` every two seconds while the UI task is enabled. The packet is addressed to MCU APID `0x100`, uses GS Source ID `0x10`, and carries exactly `{transactionId:u16, include_mask:u8, detailMask:u16}` with no downstream proxy preamble.
+
+### `stm32_sim`: endpoint simulator
+
+The simulator validates incoming packets using the typed CCSDSPack v2 PUS-A TC parser and CRC, then emits CRC-protected PUS-A TM replies. Its current MCU identity is APID `0x100`.
 
 ## Components
 
-- **`exn_gsd`** — central ground-segment daemon:
-  - owns Serial/TCP uplink and downlink;
-  - handles CCSDS framing and PUS packet decoding;
-  - maintains connection/state information and logging;
-  - exposes the local IPC endpoint used by operator tools.
-- **`exn_gsui`** — FTXUI-based terminal interface for real-time command/telemetry monitoring and operator interaction.
-- **`exn_gsdctl`** — command-line control client for scripted or non-interactive daemon commands.
-- **`stm32_sim`** — host-side simulator for exercising the device communication path without physical STM32 hardware.
+- **`exn_gsd`** — central local transport/router daemon.
+- **`exn_gsui`** — terminal operator client and scheduled client tasks.
+- **`exn_gsdctl`** — lightweight command/raw-packet IPC client.
+- **`stm32_sim`** — host-side MCU endpoint simulator using HardRT POSIX tasks.
+- **`exn_shared`** — IPC framing, CCSDS framing, CCSDSPack v2 codec helpers, mission constants, and common types.
+
+SpaceWire/SpWKit is **not currently an EXN-GS dependency**. A future SpaceWire transport should be introduced as another daemon transport backend and validated independently.
 
 ## Dependencies
-
-Current source baseline:
 
 - CMake >= 3.20;
 - C++17 compiler;
 - Boost.System / Boost.Asio;
-- FTXUI 5.0.0, fetched by CMake;
-- CCSDSPack.
+- FTXUI 5.0.0;
+- CCSDSPack v2.x;
+- HardRT for `stm32_sim`.
 
 On Debian/Ubuntu:
 
 ```bash
 sudo apt update
-sudo apt install -y libboost-dev libboost-system-dev
+sudo apt install -y build-essential cmake ninja-build libboost-dev libboost-system-dev
 ```
 
-### CCSDSPack dependency caveat
+### CCSDSPack resolution
 
-`cmake/deps.cmake` first tries `find_package(CCSDSPack)`. If no package is found, the current legacy fallback attempts to build CCSDSPack from `/home/dev/Works/CCSDSPack`, which is developer-specific and therefore not portable.
+CMake first attempts:
 
-Until issue #2 is completed, configure EXN-GS only with a compatible CCSDSPack installation available to CMake. The modernization target is a versioned CCSDSPack 2.x package contract with no local filesystem assumptions.
+```cmake
+find_package(CCSDSPack 2.0 CONFIG QUIET)
+```
 
-## Build
+If a compatible installed package is unavailable, the build fetches and installs the released CCSDSPack `v2.0.0` source into the build tree. There are no developer-local absolute source paths.
+
+## Build and test
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+cmake -S . -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-A successful clean-checkout build is part of the modernization acceptance criteria and should not rely on the legacy absolute-path fallback.
+The regression suite covers v2 TC construction/parsing, CRC rejection, TM metadata, and fragmented/concatenated CCSDS stream framing. GitHub Actions performs the same full build/test path from a clean checkout.
+
+## Quick local test
+
+For a fast simulator smoke test:
+
+```bash
+./scripts/quick_test.sh
+```
+
+The launcher builds the project if required, then opens three terminals in dependency order:
+
+1. OBC/STM32 simulator on `127.0.0.1:9000`;
+2. GS daemon on IPC `127.0.0.1:7777`, connected to the simulator;
+3. GS UI connected to the daemon.
+
+It waits for the simulator and daemon listeners before starting the next process rather than relying on fixed delays. Supported terminals are `gnome-terminal`, `konsole`, `kitty`, and `xterm`. Set `TERMINAL=<name>` to force one or `BUILD_DIR=<path>` to use another build tree.
 
 ## Usage
 
-### 1. Start the simulator
+### 1. Start the MCU simulator
 
 ```bash
-./build/sim/stm32_sim --listen 127.0.0.1:9000
+./build/sim/stm32_sim --verbose
 ```
+
+It currently listens on `127.0.0.1:9000`.
 
 ### 2. Start the daemon
 
-Connect to the simulator over TCP:
+Against the simulator:
 
 ```bash
-./build/daemon/exn_gsd --listen 127.0.0.1:7777 --port tcp://127.0.0.1:9000
+./build/daemon/exn_gsd \
+  --listen 127.0.0.1:7777 \
+  --port tcp://127.0.0.1:9000 \
+  --verbose
 ```
 
-Or connect to physical hardware over Serial:
+Against a Serial device:
 
 ```bash
-./build/daemon/exn_gsd --listen 127.0.0.1:7777 --port /dev/ttyACM0 --baud 115200
+./build/daemon/exn_gsd \
+  --listen 127.0.0.1:7777 \
+  --port /dev/ttyACM0 \
+  --baud 115200 \
+  --verbose
 ```
 
-### 3. Start the terminal UI
+The daemon may open the configured device transport automatically, but it sends no application traffic by itself.
+
+### 3. Start the UI
 
 ```bash
 ./build/ui/exn_gsui --connect 127.0.0.1:7777
 ```
 
-UI controls:
+UI keys:
 
-- `c`: open command bar;
-- `h`: toggle help overlay;
-- `q`: quit;
-- `Esc`: close the command bar or help overlay.
+- `c` — command bar;
+- `h` — help;
+- `q` — quit;
+- `Esc` — close command/help.
 
-### 4. Use the control tool
+Commands:
+
+- `CONNECT` — request device-link connection and enable the UI System HK task;
+- `DISCONNECT` — disable the UI System HK task and close the device link;
+- `PING` — query daemon/link state only;
+- `HK_ENABLE` — enable the UI-owned two-second System HK schedule;
+- `HK_DISABLE` — disable it;
+- `HK_REQ` — send one System HK request immediately.
+
+### 4. Command-line client
 
 ```bash
 ./build/tools/gsdctl/exn_gsdctl ping
-./build/tools/gsdctl/exn_gsdctl raw 0801C00000011101
+./build/tools/gsdctl/exn_gsdctl raw <complete_space_packet_hex>
 ```
 
-## Common Daemon Commands
+`raw` sends a complete Space Packet through the same direction-agnostic `PacketSend` IPC path as other clients. The daemon validates the CCSDS packet boundary but does not reinterpret the packet as an application command.
 
-Commands can be entered through the UI command bar or sent through `exn_gsdctl`:
+## Repository hygiene
 
-- `CONNECT` — open the configured device/simulator link;
-- `DISCONNECT` — close the current link;
-- `PING` — send a test PUS packet;
-- `HK_REQ` — request housekeeping telemetry.
-
-## Modernization Target
-
-EXN-GS should be considered ready for the refreshed EXN baseline once:
-
-1. it consumes a documented released CCSDSPack 2.x package;
-2. no developer-local dependency paths remain;
-3. clean-checkout CI builds and tests the installed-package integration;
-4. CCSDS/PUS command and telemetry regressions pass against the v2 API;
-5. the existing Serial/TCP simulator path remains validated;
-6. any future transport backend, including possible SpWKit integration, is documented and tested as implemented scope.
+Runtime logs, build trees, and IDE state are ignored. They are not source assets and should not be committed.

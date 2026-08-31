@@ -1,10 +1,7 @@
-#include <CCSDSHeader.h>
-#include <CCSDSPacket.h>
-#include <PusServices.h>
 #include "hardrtpp.hpp"
 
+#include "exn/shared/ccsds.hpp"
 #include "exn/shared/daemon/framer.hpp"
-
 #include "exn/shared/exn_interfaces.h"
 
 #include <boost/asio.hpp>
@@ -13,7 +10,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <string>
 #include <thread>
@@ -22,17 +18,13 @@
 using namespace hardrt;
 using boost::asio::ip::tcp;
 
-// --------------------
-// Minimal bounded ring queue (HardRT has no queue yet).
-// Busy-waits with Task::sleep(1) to avoid burning CPU.
-// --------------------
 template <typename T, size_t N>
 class RingQueue {
 public:
   bool try_push(const T& v) {
     const auto h = head_.load(std::memory_order_relaxed);
     const auto t = tail_.load(std::memory_order_acquire);
-    if (((h + 1) % N) == t) return false; // full
+    if (((h + 1) % N) == t) return false;
     buf_[h] = v;
     head_.store((h + 1) % N, std::memory_order_release);
     return true;
@@ -41,7 +33,7 @@ public:
   bool try_pop(T& out) {
     const auto t = tail_.load(std::memory_order_relaxed);
     const auto h = head_.load(std::memory_order_acquire);
-    if (t == h) return false; // empty
+    if (t == h) return false;
     out = buf_[t];
     tail_.store((t + 1) % N, std::memory_order_release);
     return true;
@@ -61,133 +53,109 @@ private:
   std::atomic<size_t> tail_{0};
 };
 
-// --------------------
-// Packet structs
-// --------------------
-struct TcMeta {
-  uint16_t apid = 0;
-  uint16_t seq  = 0;
-  uint8_t  svc  = 0;
-  uint8_t  ssvc = 0;
+struct TcMessage {
+  exn::proto::PacketMeta meta;
+  std::vector<uint8_t> application_data;
 };
 
 struct TmBytes {
   std::vector<uint8_t> bytes;
 };
 
-// --------------------
-// Globals
-// --------------------
 static std::atomic<bool> g_verbose{false};
 static std::atomic<bool> g_connected{false};
 
-static RingQueue<TcMeta, 64> g_tc_q;
+static RingQueue<TcMessage, 64> g_tc_q;
 static RingQueue<TmBytes, 64> g_tm_q;
 
 static std::shared_ptr<boost::asio::io_context> g_io;
 static std::shared_ptr<tcp::acceptor> g_acc;
 static std::shared_ptr<tcp::socket> g_sock;
 
-// --------------------
-// Forward declarations
-// --------------------
 static void start_session();
 static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer);
 static void tc_dispatch_task(void*);
 static void tm_tx_task(void*);
 
-// --------------------
-// CCSDS builder helpers (TM only, replies only)
-// --------------------
-static std::vector<uint8_t> build_tm(uint16_t apid, uint16_t seq, uint8_t svc, uint8_t ssvc) {
-  CCSDS::Packet pkt;
-  pkt.setUpdatePacketEnable(true);
-
-  auto& header = pkt.getPrimaryHeader();
-  header.setVersionNumber(0);
-  header.setType(0); // TM
-  header.setDataFieldHeaderFlag(1);
-  header.setAPID(apid);
-  header.setSequenceFlags(CCSDS::ESequenceFlag::UNSEGMENTED);
-  header.setSequenceCount(seq);
-
-  // Use PusA for TM (Service Type, Subtype, Source ID, etc.)
-  // PusA(version, serviceType, serviceSubtype, sourceID, dataLength)
-  auto pus_hdr = std::make_shared<PusA>(1, svc, ssvc, SRCID_MCU, 0);
-  pkt.setDataFieldHeader(pus_hdr);
-
-  return pkt.serialize();
+static std::vector<uint8_t> build_tm(const uint16_t apid,
+                                     const uint16_t seq,
+                                     const uint8_t svc,
+                                     const uint8_t ssvc,
+                                     const std::vector<uint8_t>& application_data = {}) {
+  std::vector<uint8_t> packet;
+  std::string error;
+  if (!exn::spacepacket::build_pus_a_tm(
+          apid, seq, svc, ssvc, application_data, packet, error)) {
+    std::printf("[EXN SIM TX] cannot build TM: %s\n", error.c_str());
+    std::fflush(stdout);
+    return {};
+  }
+  return packet;
 }
 
-// --------------------
-// Transport: (re)arm accept and start a new session
-// --------------------
+static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
+  // EXN System HK Report fixed header:
+  // [transactionId:u16][present_mask:u8][status:u8][reserved:u8]
+  std::vector<uint8_t> app(5U, 0U);
+  uint16_t transaction_id = 0U;
+  uint8_t include_mask = 0U;
+  if (tc.application_data.size() >= 3U) {
+    transaction_id = be_get_u16(tc.application_data.data());
+    include_mask = tc.application_data[2];
+  }
+
+  be_put_u16(app.data(), transaction_id);
+  app[2] = static_cast<uint8_t>(include_mask & 0x01U); // simulator exposes MCU only
+  app[3] = (include_mask & 0x06U) != 0U ? 1U : 0U;   // 0=OK, 1=PARTIAL
+  app[4] = 0U;
+  return app;
+}
+
+static std::vector<uint8_t> make_hk_report() {
+  // Generic HK payload from the EXN ICD. The simulator currently supplies zeroed
+  // deterministic values; the wire layout is what matters for GS/HIL validation.
+  return std::vector<uint8_t>(20U, 0U);
+}
+
 static void start_session() {
   g_sock = std::make_shared<tcp::socket>(*g_io);
   auto framer = std::make_shared<exn::daemon::CcsdsFramer>();
+
   if (g_verbose.load()) {
     std::printf("[EXN SIM] start session\n");
     std::fflush(stdout);
   }
 
   framer->set_on_packet([](std::vector<uint8_t>&& bytes) {
-    CCSDS::Packet pkt;
-    pkt.setUpdatePacketEnable(false);
-
-    const std::vector<uint8_t>& data{bytes};
-    // Register PUS types for deserialization
     if (g_verbose.load()) {
-      std::printf("[EXN SIM RX] buffer length: %lu \n",data.size());
-
+      std::printf("[EXN SIM RX] buffer length: %zu\n", bytes.size());
       std::printf("[EXN SIM RX] Data in: ");
-      for (const auto b : data) {
-        printf("%hu ", static_cast<uint8_t>(b));
-      }
-      printf("\n");
+      for (const auto b : bytes) std::printf("%hu ", static_cast<unsigned short>(b));
+      std::printf("\n");
       std::fflush(stdout);
     }
 
-    if (const auto exp = pkt.deserialize(data); !exp.has_value()) {
-      // Fallback if not PusA or something else
+    TcMessage tc;
+    std::string error;
+    if (!exn::spacepacket::parse_pus_a_tc(bytes, tc.meta, tc.application_data, error)) {
       if (g_verbose.load()) {
-        std::printf("[EXN SIM RX] CCSDS Packet Deserialize fail PUS-A: %s\n", exp.error().message().c_str());
-        std::fflush(stdout);
-      }
-      if (const auto expFallback = pkt.deserialize(data); !expFallback.has_value()) {
-        if (g_verbose.load()) {
-          std::printf("[EXN SIM RX] CCSDS Packet Deserialize fail FALLBACK: %s\n", expFallback.error().message().c_str());
-          std::fflush(stdout);
-        }
-        return;
-      }
-    }
-    std::printf("[EXN SIM RX] Packet header: %lu \n",pkt.getPrimaryHeader64bit());
-    std::fflush(stdout);
-    auto& header = pkt.getPrimaryHeader();
-    if (pkt.getPrimaryHeader().getType() != 1) {
-      if (g_verbose.load()) {
-        std::printf("[EXN SIM RX] CCSDS Header is not type 1 (TC), received %u\n", header.getType());
+        std::printf("[EXN SIM RX] rejected packet: %s\n", error.c_str());
         std::fflush(stdout);
       }
       return;
     }
-    // only TC
 
-    TcMeta tc;
-    tc.apid = header.getAPID();
-    tc.seq  = header.getSequenceCount();
-
-    if (header.getDataFieldHeaderFlag()) {
-      if (auto sec_hdr = pkt.getDataField().getSecondaryHeader()) {
-        if (sec_hdr->getType() == "PusA") {
-          const auto pus_a = std::static_pointer_cast<PusA>(sec_hdr);
-          tc.svc = pus_a->getServiceType();
-          tc.ssvc = pus_a->getServiceSubtype();
-        }
+    if (tc.meta.apid != APID_MCU) {
+      if (g_verbose.load()) {
+        std::printf("[EXN SIM RX] TC not addressed to MCU: APID=%u\n", tc.meta.apid);
+        std::fflush(stdout);
       }
+      return;
     }
+
     if (g_verbose.load()) {
-      std::printf("[EXN SIM] push message in queue\n");
+      std::printf("[EXN SIM RX] TC APID=%u SEQ=%u SVC=%u SSV=%u\n",
+                  tc.meta.apid, tc.meta.seq, tc.meta.svc, tc.meta.ssvc);
       std::fflush(stdout);
     }
 
@@ -200,7 +168,7 @@ static void start_session() {
         std::printf("[EXN SIM] accept error: %s\n", ec.message().c_str());
         std::fflush(stdout);
       }
-      start_session(); // retry accept
+      start_session();
       return;
     }
 
@@ -219,7 +187,7 @@ static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer) {
 
   g_sock->async_read_some(
       boost::asio::buffer(rxbuf),
-      [framer](const boost::system::error_code& ec, std::size_t n) {
+      [framer](const boost::system::error_code& ec, const std::size_t n) {
         if (ec) {
           g_connected.store(false);
           if (g_verbose.load()) {
@@ -227,7 +195,6 @@ static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer) {
             std::fflush(stdout);
           }
 
-          // Close and re-arm accept
           boost::system::error_code ignore;
           if (g_sock) {
             g_sock->shutdown(tcp::socket::shutdown_both, ignore);
@@ -243,102 +210,58 @@ static void start_async_read(std::shared_ptr<exn::daemon::CcsdsFramer> framer) {
       });
 }
 
-// --------------------
-// HardRT tasks
-// --------------------
 static void tc_dispatch_task(void*) {
-  uint16_t tm_seq = 100;
-
-  if (g_verbose.load()) {
-    std::printf("[EXN SIM RX] TC dispatch Task\n");
-    std::fflush(stdout);
-  }
+  uint16_t tm_seq = 100U;
 
   for (;;) {
-    TcMeta tc;
-    if (g_verbose.load()) {
-      std::printf("[EXN SIM] pop message from queue\n");
-      std::fflush(stdout);
-    }
+    TcMessage tc;
     g_tc_q.pop_blocking(tc);
 
-    if (g_verbose.load()) {
-      std::printf("[EXN SIM RX] TC APID=%u SEQ=%u SVC=%u SSV=%u\n",
-                  tc.apid, tc.seq, tc.svc, tc.ssvc);
-      std::fflush(stdout);
+    std::vector<uint8_t> reply;
+    if (tc.meta.svc == SVC_TIME && tc.meta.ssvc == SUB_TIME_SET) {
+      reply = build_tm(APID_MCU, tm_seq++, SVC_TIME, SUB_TIME_REPORT);
+    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQ) {
+      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_HK_REPORT, make_hk_report());
+    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQ) {
+      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
+                       make_system_hk_report(tc));
+    } else {
+      reply = build_tm(APID_MCU, tm_seq++, tc.meta.svc, 0xFEU);
     }
 
-    // SIM responds only to requests.
-    if (tc.svc == SVC_TIME && tc.ssvc == SUB_TIME_SET) {               // PING / TIME_SET
-      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_TIME, SUB_TIME_REPORT)});
-      continue;
-    }
-    if (tc.svc == SVC_HK && tc.ssvc == SUB_HK_REQ) {                  // HK_REQ
-      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_HK, SUB_HK_REPORT)});
-      continue;
-    }
-    if (tc.svc == SVC_HK && tc.ssvc == SUB_SYS_HK_REQ) {              // SYS_HK_REQ
-      g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT)});
-      continue;
-    }
-
-    g_tm_q.push_blocking({build_tm(APID_GS, tm_seq++, tc.svc, 0xFE)});
+    tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
+    if (!reply.empty()) g_tm_q.push_blocking({std::move(reply)});
   }
 }
 
 static void tm_tx_task(void*) {
   for (;;) {
-    if (g_verbose.load()) {
-      std::printf("[EXN SIM TX] TM Task\n");
-      std::fflush(stdout);
-    }
     TmBytes tm;
     g_tm_q.pop_blocking(tm);
 
-    // Drop replies if not connected.
     if (!g_connected.load()) {
       if (g_verbose.load()) {
-        std::printf("[EXN SIM TX] Error: Not connected, Dropping bytes.\n");
+        std::printf("[EXN SIM TX] not connected, dropping TM\n");
         std::fflush(stdout);
       }
       continue;
     }
-    CCSDS::Packet pkt;
-    if (pkt.deserialize(tm.bytes, "PusA").has_value()) {
-      auto& header = pkt.getPrimaryHeader();
-      const uint16_t apid = header.getAPID();
-      const uint16_t seq  = header.getSequenceCount();
-      uint8_t svc = 0, ssvc = 0;
-      if (header.getDataFieldHeaderFlag()) {
-        auto sec_hdr = pkt.getDataField().getSecondaryHeader();
-        if (sec_hdr && sec_hdr->getType() == "PusA") {
-          auto pus_a = std::static_pointer_cast<PusA>(sec_hdr);
-          svc = pus_a->getServiceType();
-          ssvc = pus_a->getServiceSubtype();
-        } else {
-          std::printf("[EXN SIM TX] TM len=%zu (invalid CCSDS)\n", tm.bytes.size());
-          std::fflush(stdout);
-        }
-      }
+
     if (g_verbose.load()) {
-        std::printf("[EXN SIM TX] TM APID=%u SEQ=%u SVC=%u SSV=%u\n", apid, seq, svc, ssvc);
-        std::fflush(stdout);
+      exn::proto::PacketMeta meta;
+      std::string error;
+      if (exn::spacepacket::decode_meta(tm.bytes, meta, error)) {
+        std::printf("[EXN SIM TX] TM APID=%u SEQ=%u SVC=%u SSV=%u\n",
+                    meta.apid, meta.seq, meta.svc, meta.ssvc);
+      } else {
+        std::printf("[EXN SIM TX] invalid TM: %s\n", error.c_str());
       }
+      std::fflush(stdout);
     }
 
     auto bytes = std::make_shared<std::vector<uint8_t>>(std::move(tm.bytes));
     g_io->post([bytes]() {
-      if (!g_connected.load() || !g_sock) {
-        if (g_verbose.load()) {
-          std::printf("[EXN SIM TX] Error: Not connected / Sock closed.\n");
-          std::fflush(stdout);
-        }
-        return;
-      }
-      if (g_verbose.load()) {
-        std::printf("[EXN SIM TX] DBG: Packet buffer data size: %lu\n",bytes->size());
-        std::fflush(stdout);
-      }
+      if (!g_connected.load() || !g_sock) return;
       boost::asio::async_write(
           *g_sock, boost::asio::buffer(*bytes),
           [bytes](const boost::system::error_code&, std::size_t) {});
@@ -346,16 +269,13 @@ static void tm_tx_task(void*) {
   }
 }
 
-// --------------------
-// main()
-// --------------------
 int main(int argc, char** argv) {
   std::string host = "127.0.0.1";
   uint16_t port = 9000;
 
   for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    if (a == "-v" || a == "--verbose") g_verbose = true;
+    const std::string arg = argv[i];
+    if (arg == "-v" || arg == "--verbose") g_verbose = true;
   }
 
   std::printf("HardRT version: %s (0x%06X), port: %s (id=%d)\n",
@@ -363,19 +283,16 @@ int main(int argc, char** argv) {
               System::port_name(), System::port_id());
   std::fflush(stdout);
 
-  // HardRT init (no designated initializers; C++17 friendly)
   hrt_config_t cfg{};
   cfg.tick_hz = 1000;
   cfg.policy = HRT_SCHED_PRIORITY_RR;
   cfg.default_slice = 5;
-  // Leave other fields defaulted by {}.
 
   if (System::init(cfg) != 0) {
     std::puts("HardRT init failed");
     return 1;
   }
 
-  // TCP acceptor
   g_io = std::make_shared<boost::asio::io_context>();
   g_acc = std::make_shared<tcp::acceptor>(
       *g_io,
@@ -384,13 +301,9 @@ int main(int argc, char** argv) {
   std::printf("stm32_sim listening on %s:%u\n", host.c_str(), port);
   std::fflush(stdout);
 
-  // Start accepting connections (non-blocking)
   start_session();
-
-  // Run Asio in its own thread
   std::thread io_thread([&]() { g_io->run(); });
 
-  // Create tasks (stack size + ids based on your example style)
   if (Task::create<2048, 0>(tc_dispatch_task, nullptr, HRT_PRIO1, 0) < 0)
     std::puts("create tc_dispatch_task failed");
 
