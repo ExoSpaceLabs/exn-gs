@@ -1,0 +1,20 @@
+# Build outputs
+/build/
+/cmake-build-*/
+/_deps/
+/external_install/
+compile_commands.json
+
+# Runtime output
+/logs/
+*.log
+
+# IDE/editor state
+/.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
