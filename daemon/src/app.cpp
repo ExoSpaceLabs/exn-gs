@@ -99,8 +99,6 @@ int App::run() {
   };
 
   ipc.set_on_connect([&](const std::shared_ptr<IpcSession>& session) {
-    // A late-joining UI must receive the current device state immediately;
-    // broadcasts that happened before it connected are not history.
     session->send(current_link_frame());
   });
 
@@ -159,9 +157,6 @@ int App::run() {
         return;
       }
 
-      // The daemon is a transport/router. Packet direction and mission semantics
-      // belong to the client and endpoint, so both TC and TM Space Packets may be
-      // forwarded over the physical/simulator link.
       link.write_bytes(frame.payload.data(), frame.payload.size());
       state.on_tx(frame.payload.size());
       ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, meta, "TX"));
@@ -177,7 +172,8 @@ int App::run() {
     command = uppercase(command);
 
     if (command == "CONNECT") {
-      link.start();
+      if (link.opened()) session->send(current_link_frame());
+      else link.start();
       return;
     }
     if (command == "DISCONNECT") {
@@ -213,7 +209,6 @@ int App::run() {
   std::cout << "exn_gsd listening on " << cfg_.listen_host << ":" << cfg_.listen_port << "\n";
   std::cout << "Link port: " << (cfg_.serial_port.empty() ? "(none)" : cfg_.serial_port) << "\n";
 
-  // Transport ownership belongs to the daemon. Application traffic does not.
   if (!cfg_.serial_port.empty()) link.start();
 
   io.run();
