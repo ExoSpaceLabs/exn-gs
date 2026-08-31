@@ -59,7 +59,7 @@ void IpcSession::send(const exn::proto::Frame& f) {
   auto self = shared_from_this();
   boost::asio::async_write(sock_, boost::asio::buffer(*bytes),
     [self, bytes](const boost::system::error_code& /*ec*/, std::size_t /*n*/) {
-      // ignore
+      // Best-effort IPC notification. Session cleanup happens when reads fail.
     });
 }
 
@@ -67,17 +67,17 @@ void IpcSession::do_read() {
   auto self = shared_from_this();
   sock_.async_read_some(boost::asio::buffer(tmp_),
     [this, self](const boost::system::error_code& ec, std::size_t n) {
-      if (ec) {
-        return;
-      }
+      if (ec) return;
+
       rxbuf_.insert(rxbuf_.end(), tmp_.data(), tmp_.data() + n);
 
       exn::proto::Frame f;
       while (exn::proto::try_decode(rxbuf_, f)) {
-        if (owner_.on_command_) {
-          if (f.type == exn::proto::MsgType::Command || f.type == exn::proto::MsgType::Query) {
-            owner_.on_command_(f, self);
-          }
+        if (!owner_.on_frame_) continue;
+        if (f.type == exn::proto::MsgType::Command ||
+            f.type == exn::proto::MsgType::Query ||
+            f.type == exn::proto::MsgType::PacketSend) {
+          owner_.on_frame_(f, self);
         }
       }
 
