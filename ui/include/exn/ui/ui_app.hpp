@@ -34,11 +34,11 @@ namespace exn::ui {
     std::string notice_line_;
     std::unordered_map<int, UiServiceStatus> services_;
 
-    std::deque<PacketRow> tc_rows_;
-    std::deque<PacketRow> tm_rows_;
+    std::deque<PacketRow> tx_rows_;
+    std::deque<PacketRow> rx_rows_;
 
-    void push_tc(const exn::proto::PacketMeta& m, const std::string& desc);
-    void push_tm(const exn::proto::PacketMeta& m, const std::string& desc);
+    void push_tx(const exn::proto::PacketMeta& m, const std::string& desc);
+    void push_rx(const exn::proto::PacketMeta& m, const std::string& desc);
   };
 
 } // namespace exn::ui
