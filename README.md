@@ -106,12 +106,28 @@ ctest --test-dir build --output-on-failure
 
 The regression suite covers v2 TC construction/parsing, CRC rejection, TM metadata, and fragmented/concatenated CCSDS stream framing. GitHub Actions performs the same full build/test path from a clean checkout.
 
+## Quick local test
+
+For a fast simulator smoke test:
+
+```bash
+./scripts/quick_test.sh
+```
+
+The launcher builds the project if required, then opens three terminals in dependency order:
+
+1. OBC/STM32 simulator on `127.0.0.1:9000`;
+2. GS daemon on IPC `127.0.0.1:7777`, connected to the simulator;
+3. GS UI connected to the daemon.
+
+It waits for the simulator and daemon listeners before starting the next process rather than relying on fixed delays. Supported terminals are `gnome-terminal`, `konsole`, `kitty`, and `xterm`. Set `TERMINAL=<name>` to force one or `BUILD_DIR=<path>` to use another build tree.
+
 ## Usage
 
 ### 1. Start the MCU simulator
 
 ```bash
-./build/sim/stm32_sim
+./build/sim/stm32_sim --verbose
 ```
 
 It currently listens on `127.0.0.1:9000`.
@@ -123,7 +139,8 @@ Against the simulator:
 ```bash
 ./build/daemon/exn_gsd \
   --listen 127.0.0.1:7777 \
-  --port tcp://127.0.0.1:9000
+  --port tcp://127.0.0.1:9000 \
+  --verbose
 ```
 
 Against a Serial device:
@@ -132,7 +149,8 @@ Against a Serial device:
 ./build/daemon/exn_gsd \
   --listen 127.0.0.1:7777 \
   --port /dev/ttyACM0 \
-  --baud 115200
+  --baud 115200 \
+  --verbose
 ```
 
 The daemon may open the configured device transport automatically, but it sends no application traffic by itself.
