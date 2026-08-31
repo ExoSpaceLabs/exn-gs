@@ -27,9 +27,11 @@ namespace exn::ui {
     std::string host_;
     uint16_t port_;
 
-    // UI state updated from IPC thread
+    // UI state updated from the IPC thread.
     std::mutex mtx_;
-    std::string link_line_ = "DISCONNECTED";
+    std::string daemon_line_ = "CONNECTING";
+    std::string device_line_ = "UNKNOWN";
+    std::string notice_line_;
     std::unordered_map<int, UiServiceStatus> services_;
 
     std::deque<PacketRow> tc_rows_;
