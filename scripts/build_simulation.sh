@@ -91,6 +91,33 @@ fi
 if [[ "$CLEAN" -eq 1 ]]; then
   log "removing build tree: ${BUILD_DIR}"
   rm -rf -- "$BUILD_DIR"
+else
+  # Migration cleanup for builds created before the CCSDSPack fallback was moved
+  # into isolated, versioned directories. The legacy ExternalProject prefix could
+  # retain a CMakeCache.txt whose source was a developer-local checkout such as
+  # /home/dev/Works/CCSDSPack. Keeping that cache makes CMake reject the fetched
+  # source even though the repository itself is correct.
+  LEGACY_CCSDSPACK_PREFIX="${BUILD_DIR}/ccsdspack_build-prefix"
+  if [[ -d "$LEGACY_CCSDSPACK_PREFIX" ]]; then
+    log "removing legacy CCSDSPack ExternalProject cache: ${LEGACY_CCSDSPACK_PREFIX}"
+    rm -rf -- "$LEGACY_CCSDSPACK_PREFIX"
+  fi
+
+  CCSDSPACK_DEP_DIR="${BUILD_DIR}/_deps/ccsdspack-v2.0.0"
+  CCSDSPACK_SOURCE_DIR="${CCSDSPACK_DEP_DIR}/src"
+  CCSDSPACK_CACHE="${CCSDSPACK_DEP_DIR}/build/CMakeCache.txt"
+
+  # A cache in the source tree is always invalid for our out-of-source dependency build.
+  if [[ -f "${CCSDSPACK_SOURCE_DIR}/CMakeCache.txt" ]]; then
+    log "removing contaminated CCSDSPack dependency tree (source-tree CMake cache found)"
+    rm -rf -- "$CCSDSPACK_DEP_DIR"
+  elif [[ -f "$CCSDSPACK_CACHE" ]]; then
+    cached_source="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$CCSDSPACK_CACHE" | head -n 1)"
+    if [[ -n "$cached_source" && "$cached_source" != "$CCSDSPACK_SOURCE_DIR" ]]; then
+      log "removing stale CCSDSPack dependency cache (was configured from ${cached_source})"
+      rm -rf -- "$CCSDSPACK_DEP_DIR"
+    fi
+  fi
 fi
 
 configure_args=(
