@@ -119,18 +119,17 @@ int App::run() {
       exn::proto::PacketMeta meta;
       std::string error;
       if (!exn::spacepacket::decode_meta(frame.payload, meta, error)) {
-        session->send(make_error_frame("Rejected uplink packet: " + error));
-        return;
-      }
-      if (meta.typ != 1U) {
-        session->send(make_error_frame("Rejected uplink packet: CCSDS Packet Type is not TC"));
+        session->send(make_error_frame("Rejected outbound packet: " + error));
         return;
       }
       if (!link.opened()) {
-        session->send(make_error_frame("Rejected uplink packet: device link is disconnected"));
+        session->send(make_error_frame("Rejected outbound packet: device link is disconnected"));
         return;
       }
 
+      // The daemon is a transport/router. Packet direction and mission semantics
+      // belong to the client and endpoint, so both TC and TM Space Packets may be
+      // forwarded over the physical/simulator link.
       link.write_bytes(frame.payload.data(), frame.payload.size());
       ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, meta, "TX"));
       if (cfg_.verbose) print_packet("[TX->LINK]", meta, "TX");
