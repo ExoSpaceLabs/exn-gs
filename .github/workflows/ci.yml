@@ -34,5 +34,15 @@ jobs:
             libboost-dev \
             libboost-system-dev
 
+      - name: Seed stale CCSDSPack caches
+        run: |
+          mkdir -p build/ccsdspack_build-prefix/src/ccsdspack_build
+          printf '%s\n' 'CMAKE_HOME_DIRECTORY:INTERNAL=/home/dev/Works/CCSDSPack' \
+            > build/ccsdspack_build-prefix/src/ccsdspack_build/CMakeCache.txt
+
+          mkdir -p build/_deps/ccsdspack-v2.0.0/build
+          printf '%s\n' 'CMAKE_HOME_DIRECTORY:INTERNAL=/home/dev/Works/CCSDSPack' \
+            > build/_deps/ccsdspack-v2.0.0/build/CMakeCache.txt
+
       - name: Build and test simulation stack
         run: ./scripts/build_simulation.sh --build-type Release
