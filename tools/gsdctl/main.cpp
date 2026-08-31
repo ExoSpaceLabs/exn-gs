@@ -85,6 +85,12 @@ static void print_frame(const exn::proto::Frame& frame) {
   }
 }
 
+enum class LinkExpectation {
+  Any,
+  Connected,
+  Disconnected,
+};
+
 int main(int argc, char** argv) {
   std::string host = "127.0.0.1";
   uint16_t port = 7777;
@@ -117,38 +123,46 @@ int main(int argc, char** argv) {
 
     std::vector<uint8_t> rx_buffer;
     rx_buffer.reserve(4096);
-
-    // A daemon session starts with Hello and the current device-link state.
     exn::proto::Frame frame;
+
+    // Every new session receives a Hello followed by the current device-link state.
     if (!read_frame(socket, rx_buffer, frame)) {
       std::cerr << "Error: daemon closed IPC during handshake\n";
       return 1;
     }
     print_frame(frame);
 
+    do {
+      if (!read_frame(socket, rx_buffer, frame)) {
+        std::cerr << "Error: daemon closed IPC before initial link state\n";
+        return 1;
+      }
+      print_frame(frame);
+    } while (frame.type != exn::proto::MsgType::LinkState);
+
     exn::proto::Frame request;
     exn::proto::MsgType expected = exn::proto::MsgType::QueryResult;
-    bool wait_for_connected_after_reconnect = false;
+    LinkExpectation link_expectation = LinkExpectation::Any;
 
     if (command == "ping") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("PING")};
-      expected = exn::proto::MsgType::QueryResult;
     } else if (command == "status") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("STATUS")};
       expected = exn::proto::MsgType::LinkState;
     } else if (command == "stats") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("STATS")};
-      expected = exn::proto::MsgType::QueryResult;
     } else if (command == "connect") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("CONNECT")};
       expected = exn::proto::MsgType::LinkState;
+      link_expectation = LinkExpectation::Connected;
     } else if (command == "disconnect") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("DISCONNECT")};
       expected = exn::proto::MsgType::LinkState;
+      link_expectation = LinkExpectation::Disconnected;
     } else if (command == "reconnect") {
       request = {exn::proto::MsgType::Command, exn::proto::pack_string("RECONNECT")};
       expected = exn::proto::MsgType::LinkState;
-      wait_for_connected_after_reconnect = true;
+      link_expectation = LinkExpectation::Connected;
     } else if (command == "raw") {
       if (args.empty()) {
         std::cerr << "Error: raw command requires one hex Space Packet\n";
@@ -168,7 +182,6 @@ int main(int argc, char** argv) {
     const auto encoded = exn::proto::encode(request);
     boost::asio::write(socket, boost::asio::buffer(encoded));
 
-    // Ignore unrelated asynchronous notifications until the requested response arrives.
     for (;;) {
       if (!read_frame(socket, rx_buffer, frame)) {
         std::cerr << "Error: daemon closed IPC before replying\n";
@@ -179,10 +192,16 @@ int main(int argc, char** argv) {
       if (frame.type == exn::proto::MsgType::Error) return 1;
       if (frame.type != expected) continue;
 
-      if (wait_for_connected_after_reconnect && frame.type == exn::proto::MsgType::LinkState) {
+      if (frame.type == exn::proto::MsgType::LinkState) {
         std::string state;
-        if (unpack_text(frame, state) &&
-            state.rfind("DISCONNECTED", 0) == 0) {
+        if (!unpack_text(frame, state)) continue;
+        if (state.rfind("ERROR", 0) == 0) return 1;
+        if (link_expectation == LinkExpectation::Connected &&
+            state.rfind("CONNECTED", 0) != 0) {
+          continue;
+        }
+        if (link_expectation == LinkExpectation::Disconnected &&
+            state.rfind("DISCONNECTED", 0) != 0) {
           continue;
         }
       }
