@@ -64,7 +64,6 @@ void SerialLink::start() {
   if (port_.empty()) {
     connecting_ = false;
     if (on_error_) on_error_("no port configured (use --port /dev/ttyACM0 or --port tcp://HOST:PORT)");
-    if (on_state_) on_state_(false, "");
     return;
   }
 
@@ -73,7 +72,6 @@ void SerialLink::start() {
   if (ec) {
     connecting_ = false;
     if (on_error_) on_error_("serial open failed: " + ec.message());
-    if (on_state_) on_state_(false, port_);
     return;
   }
 
@@ -82,7 +80,6 @@ void SerialLink::start() {
     connecting_ = false;
     sp_.close();
     if (on_error_) on_error_("serial baud set failed: " + ec.message());
-    if (on_state_) on_state_(false, port_);
     return;
   }
 
@@ -94,7 +91,6 @@ void SerialLink::start() {
 }
 
 void SerialLink::stop() {
-  const bool was_active = opened_ || connecting_;
   ++generation_; // invalidate all callbacks from the previous connection attempt/session
 
   boost::system::error_code ec;
@@ -112,7 +108,7 @@ void SerialLink::stop() {
   connecting_ = false;
   tx_queue_.clear();
 
-  if (was_active && on_state_) on_state_(false, detail_);
+  if (on_state_) on_state_(false, detail_);
 }
 
 void SerialLink::write_bytes(const uint8_t* data, size_t n) {
@@ -198,8 +194,9 @@ void SerialLink::handle_io_error(const std::string& context,
     sp_.close(ignored);
   }
 
+  // Keep ERROR as the externally visible state. A subsequent CONNECT/RECONNECT
+  // can retry, while DISCONNECT explicitly transitions to DISCONNECTED.
   if (on_error_) on_error_(context + ": " + ec.message());
-  if (on_state_) on_state_(false, detail_);
 }
 
 } // namespace exn::daemon
