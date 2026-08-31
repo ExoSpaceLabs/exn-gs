@@ -1,5 +1,7 @@
 #include "exn/ui/ui_app.hpp"
 #include "exn/ui/ipc_client.hpp"
+#include "exn/shared/ccsds.hpp"
+#include "exn/shared/exn_interfaces.h"
 #include "exn/shared/protocol.hpp"
 #include "exn/shared/time.hpp"
 
@@ -10,9 +12,13 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/terminal.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <ctime>
+#include <functional>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <thread>
 
@@ -65,6 +71,13 @@ static std::string trunc_ellipsis(const std::string& s, int w) {
   if ((int)s.size() <= w) return s;
   if (w <= 1) return s.substr(0, 1);
   return s.substr(0, w - 1) + "…";
+}
+
+static std::string uppercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+    return static_cast<char>(std::toupper(c));
+  });
+  return value;
 }
 
 struct Col { const char* name; int w; bool right; };
@@ -126,7 +139,6 @@ static std::string render_packet_table_text(const std::deque<PacketRow>& rows,
   return out.str();
 }
 
-// Render multi-line text WITHOUT wrapping (paragraph wraps).
 static ftxui::Element preformatted_block(const std::string& s) {
   using namespace ftxui;
   Elements lines;
@@ -138,12 +150,53 @@ static ftxui::Element preformatted_block(const std::string& s) {
     if (end == s.size()) break;
     start = end + 1;
   }
-  return vbox(std::move(lines)) | frame; // frame clips to available area
+  return vbox(std::move(lines)) | frame;
 }
 
 int UiApp::run() {
   boost::asio::io_context io;
   IpcClient client(io, host_, port_);
+  boost::asio::steady_timer hk_timer(io);
+  std::atomic<bool> hk_enabled{false};
+  uint16_t tc_sequence = 1U;
+  uint16_t hk_transaction_id = 1U;
+
+  auto send_system_hk = [&]() {
+    std::vector<uint8_t> app_data(5U, 0U);
+    be_put_u16(app_data.data(), hk_transaction_id);
+    app_data[2] = 0x07U; // MCU + PI + FPGA
+    be_put_u16(app_data.data() + 3U, 0U); // default detail mask
+
+    std::vector<uint8_t> packet;
+    std::string error;
+    if (!exn::spacepacket::build_pus_a_tc(APID_MCU,
+                                           tc_sequence,
+                                           SVC_HK,
+                                           SUB_SYS_HK_REQ,
+                                           SRCID_GS,
+                                           app_data,
+                                           packet,
+                                           error)) {
+      std::cerr << "[ui] cannot build System HK TC: " << error << "\n";
+      return;
+    }
+
+    client.send_packet(packet);
+    tc_sequence = static_cast<uint16_t>((tc_sequence + 1U) & 0x3FFFU);
+    hk_transaction_id = hk_transaction_id == 0xFFFFU
+                          ? 1U
+                          : static_cast<uint16_t>(hk_transaction_id + 1U);
+  };
+
+  std::function<void()> arm_hk;
+  arm_hk = [&]() {
+    hk_timer.expires_after(std::chrono::seconds(2));
+    hk_timer.async_wait([&](const boost::system::error_code& ec) {
+      if (ec) return;
+      if (hk_enabled.load()) send_system_hk();
+      arm_hk();
+    });
+  };
 
   client.set_on_frame([this](const exn::proto::Frame& f) {
     switch (f.type) {
@@ -168,18 +221,25 @@ int UiApp::run() {
         push_tc(m, desc);
         break;
       }
+      case exn::proto::MsgType::Error: {
+        std::string s;
+        if (!exn::proto::unpack_string(f.payload, s)) return;
+        std::lock_guard<std::mutex> lk(mtx_);
+        link_line_ = "ERROR " + s;
+        break;
+      }
       default:
         break;
     }
   });
 
   client.start();
+  arm_hk();
   std::thread io_thread([&]() { io.run(); });
 
   using namespace ftxui;
   auto screen = ScreenInteractive::Fullscreen();
 
-  // Refresh once per second
   std::atomic<bool> running{true};
   std::thread tick([&] {
     while (running.load()) {
@@ -188,7 +248,6 @@ int UiApp::run() {
     }
   });
 
-  // CMD + help state
   bool cmd_mode = false;
   bool help_mode = false;
   std::string cmd_input;
@@ -211,7 +270,6 @@ int UiApp::run() {
     const int term_w = size.dimx;
     const int term_h = size.dimy;
 
-    // Leave room for top + services + footer/cmd bar.
     const int overhead = cmd_mode ? 14 : 10;
     const int available_h = std::max(6, term_h - overhead);
     const int table_rows = std::max(1, available_h - 3);
@@ -220,27 +278,23 @@ int UiApp::run() {
     const std::string tm_text = render_packet_table_text(tm_rows, table_rows, term_w / 2);
 
     auto topLinkName = vbox({
-      text("Deamon Link: "),
+      text("Daemon Link: "),
       text("Device Link: ")
     });
-    std::string link2 = "127.0.0.1:9000";
+    std::string link2 = "via daemon";
     auto topLinkValue = vbox({
-      text( link) ,
-      text( link2)
+      text(link),
+      text(link2)
     });
 
     auto link1col = color(Color::Green);
-    if (link == "DISCONNECTED") {
+    if (link == "DISCONNECTED" || link.rfind("ERROR", 0) == 0) {
       link1col = color(Color::Red);
-    }
-    auto link1col2 = color(Color::Green);
-    if (link2 == "DISCONNECTED") {
-      link1col2 = color(Color::Red);
     }
 
     auto topLinkStatus = vbox({
       text("● ") | link1col,
-      text("● ") | link1col2,
+      text("● ") | link1col,
     });
 
     auto topLinks = hbox({
@@ -255,14 +309,12 @@ int UiApp::run() {
       topLinks
     });
 
+    auto hk_color = hk_enabled.load() ? color(Color::Green) : color(Color::Yellow);
     auto services_panel = hbox({
-        text("Services: ") | bold,
-        text("HK ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
-        text("TIME ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
-        text("EVENT ")|bold, text("●  ")|color(Color::Green), text(" | ") | bold,
-        text("MEM ")|bold, text("●  ")|color(Color::Yellow), text(" | ") | bold,
-        text("PAYLOAD ")|bold, text("●  ")|color(Color::Red), text(" | ") | bold,
-        text("MODE ")|bold, text("●")|color(Color::Green)
+        text("Client tasks: ") | bold,
+        text("HK ") | bold, text("●  ") | hk_color, text(" | ") | bold,
+        text("TIME manual  |  EVENT RX  |  MEM manual  |  PAYLOAD manual  |  MODE manual")
+          | color(Color::GrayLight)
     });
 
     auto tc_panel = vbox({
@@ -277,7 +329,6 @@ int UiApp::run() {
       preformatted_block(tm_text) | color(Color::GrayLight),
     }) | border | flex;
 
-    // Bottom bar: only show when CMD is open (as requested)
     Element cmd_bar = filler();
     if (cmd_mode) {
       cmd_bar = vbox({
@@ -297,10 +348,8 @@ int UiApp::run() {
       cmd_bar,
     });
 
-    if (!help_mode)
-      return base;
+    if (!help_mode) return base;
 
-    // Help overlay (popup)
     auto help = vbox({
       text("Help") | bold,
       separator(),
@@ -310,13 +359,15 @@ int UiApp::run() {
       text("  q   quit (only when CMD/Help closed)"),
       text("  Esc close CMD/Help"),
       separator(),
-      text("Daemon commands (examples):") | bold,
+      text("Daemon transport commands:") | bold,
       text("  CONNECT"),
       text("  DISCONNECT"),
-      text("  PING"),
-      text("  HK_ENABLE"),
-      text("  HK_DISABLE"),
-      text("  HK_REQ"),
+      text("  PING          local daemon/link-state check"),
+      separator(),
+      text("UI-owned application tasks:") | bold,
+      text("  HK_ENABLE     enable 2 s System HK requests"),
+      text("  HK_DISABLE    disable periodic System HK"),
+      text("  HK_REQ        send one System HK request"),
     }) | border | bgcolor(Color::Black) | color(Color::White);
 
     return dbox({
@@ -325,43 +376,32 @@ int UiApp::run() {
     });
   });
 
-  // Root container owns focus between input and renderer.
-  auto root = Container::Vertical({
-    main_renderer
-  });
+  auto root = Container::Vertical({main_renderer});
 
-  // Event handling over the whole app
   auto wrapped = CatchEvent(root, [&](Event e) {
-    // Help has priority: Esc closes help first
     if (help_mode) {
       if (e == Event::Escape || e == Event::Character('h')) {
         help_mode = false;
         return true;
       }
-      // don't let help steal typing etc.
       return true;
     }
 
-    // Global quit only when not in CMD mode
     if (!cmd_mode && (e == Event::Character('q') || e == Event::Escape)) {
       screen.ExitLoopClosure()();
       return true;
     }
 
-    // Toggle help
     if (e == Event::Character('h')) {
       help_mode = true;
       return true;
     }
-
-    // Toggle CMD mode
 
     if (e == Event::Character('c') && !cmd_mode) {
       cmd_mode = true;
       return true;
     }
 
-    // CMD mode behavior
     if (cmd_mode) {
       if (e == Event::Escape) {
         cmd_mode = false;
@@ -369,12 +409,28 @@ int UiApp::run() {
       }
       if (e == Event::Return) {
         if (!cmd_input.empty()) {
-          client.send_command(cmd_input);
+          const std::string command = uppercase(cmd_input);
+          if (command == "CONNECT") {
+            client.send_command("CONNECT");
+            hk_enabled.store(true);
+          } else if (command == "DISCONNECT") {
+            hk_enabled.store(false);
+            client.send_command("DISCONNECT");
+          } else if (command == "PING") {
+            client.send_command("PING");
+          } else if (command == "HK_ENABLE") {
+            hk_enabled.store(true);
+          } else if (command == "HK_DISABLE") {
+            hk_enabled.store(false);
+          } else if (command == "HK_REQ") {
+            boost::asio::post(io, send_system_hk);
+          } else {
+            client.send_command(cmd_input);
+          }
           cmd_input.clear();
         }
         return true;
       }
-      // forward everything else to the Input widget
       return cmd_input_comp->OnEvent(e);
     }
 
@@ -383,9 +439,12 @@ int UiApp::run() {
 
   screen.Loop(wrapped);
 
+  hk_enabled.store(false);
   running.store(false);
   if (tick.joinable()) tick.join();
 
+  boost::system::error_code ignored;
+  hk_timer.cancel(ignored);
   io.stop();
   if (io_thread.joinable()) io_thread.join();
   return 0;
