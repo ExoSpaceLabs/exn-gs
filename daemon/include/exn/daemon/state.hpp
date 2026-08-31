@@ -19,6 +19,8 @@ struct StateSnapshot {
 
   uint64_t rx_packets = 0;
   uint64_t rx_bytes = 0;
+  uint64_t tx_packets = 0;
+  uint64_t tx_bytes = 0;
   uint64_t decode_errors = 0;
   uint64_t framing_errors = 0;
 
@@ -31,6 +33,7 @@ public:
 
   void set_link(exn::LinkState st, std::string detail);
   void on_packet(const exn::PacketRecord& rec);
+  void on_tx(size_t bytes);
   void on_decode_error();
   void on_framing_error();
 
