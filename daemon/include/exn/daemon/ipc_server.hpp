@@ -13,19 +13,16 @@ class IpcSession;
 
 class IpcServer {
 public:
-  using OnCommand = std::function<void(const exn::proto::Frame&, std::shared_ptr<IpcSession>)>;
+  using OnFrame = std::function<void(const exn::proto::Frame&, std::shared_ptr<IpcSession>)>;
 
   IpcServer(boost::asio::io_context& io, const std::string& host, uint16_t port);
 
   void start();
   void broadcast(const exn::proto::Frame& f);
-
-  void set_on_command(OnCommand cb) { on_command_ = std::move(cb); }
-
-  // v0: exposed so sessions can call it without extra plumbing.
-  OnCommand on_command_;
+  void set_on_frame(OnFrame cb) { on_frame_ = std::move(cb); }
 
 private:
+  friend class IpcSession;
   void do_accept();
 
   boost::asio::io_context& io_;
@@ -33,6 +30,7 @@ private:
 
   std::mutex mtx_;
   std::vector<std::weak_ptr<IpcSession>> sessions_;
+  OnFrame on_frame_;
 };
 
 class IpcSession : public std::enable_shared_from_this<IpcSession> {
