@@ -15,7 +15,9 @@ FetchContent_MakeAvailable(ftxui)
 
 # CCSDSPack v2 integration.
 # Prefer an installed compatible 2.x package. For clean checkouts, build the
-# released v2.0.0 source in isolation and consume its installed package target.
+# released v2.0.0 source in isolated, versioned directories. Explicit source,
+# binary, and install directories prevent stale CMake caches from an old local
+# checkout (for example /home/dev/Works/CCSDSPack) being reused accidentally.
 include(ExternalProject)
 
 find_package(CCSDSPack 2.0 CONFIG QUIET)
@@ -23,16 +25,23 @@ if(CCSDSPack_FOUND AND TARGET ccsdspack::CCSDSPack)
   message(STATUS "Found CCSDSPack ${CCSDSPack_VERSION}: ${CCSDSPack_DIR}")
 else()
   set(CCSDSPACK_VERSION v2.0.0)
-  set(CCSDSPACK_INSTALL_DIR ${CMAKE_BINARY_DIR}/external_install)
+  set(CCSDSPACK_DEPS_DIR ${CMAKE_BINARY_DIR}/_deps/ccsdspack-${CCSDSPACK_VERSION})
+  set(CCSDSPACK_SOURCE_DIR ${CCSDSPACK_DEPS_DIR}/src)
+  set(CCSDSPACK_BINARY_DIR ${CCSDSPACK_DEPS_DIR}/build)
+  set(CCSDSPACK_INSTALL_DIR ${CCSDSPACK_DEPS_DIR}/install)
 
   message(STATUS "CCSDSPack 2.x not found. Building ${CCSDSPACK_VERSION} from the released source...")
   ExternalProject_Add(ccsdspack_build
+    PREFIX ${CCSDSPACK_DEPS_DIR}/prefix
+    SOURCE_DIR ${CCSDSPACK_SOURCE_DIR}
+    BINARY_DIR ${CCSDSPACK_BINARY_DIR}
+    INSTALL_DIR ${CCSDSPACK_INSTALL_DIR}
     GIT_REPOSITORY https://github.com/ExoSpaceLabs/CCSDSPack.git
     GIT_TAG ${CCSDSPACK_VERSION}
     GIT_SHALLOW TRUE
     UPDATE_DISCONNECTED TRUE
     CMAKE_ARGS
-      -DCMAKE_INSTALL_PREFIX=${CCSDSPACK_INSTALL_DIR}
+      -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
       -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
       -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
       -DENABLE_TESTER=OFF
