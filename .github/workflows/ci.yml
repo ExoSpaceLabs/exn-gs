@@ -18,6 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate scripts
+        run: bash -n scripts/quick_test.sh
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
