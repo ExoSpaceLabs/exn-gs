@@ -8,7 +8,7 @@ namespace exn::proto {
 enum class MsgType : uint16_t {
   Hello = 1,
   LinkState = 2,
-  // Telemetry/raw packets received from the device link.
+  // Raw packets received from the device link.
   PacketRx = 3,
   // Metadata notification for a packet forwarded to the device link.
   PacketTx = 4,
@@ -17,7 +17,8 @@ enum class MsgType : uint16_t {
   Command = 10,
   Query = 11,
   QueryResult = 12,
-  // Raw CCSDS Space Packet supplied by an IPC client for uplink routing.
+  // Complete CCSDS Space Packet supplied by an IPC client for outbound routing.
+  // Packet Type may be TC/request or TM/report; the daemon does not impose mission semantics.
   PacketSend = 13,
 };
 
@@ -34,7 +35,7 @@ struct PacketMeta {
   uint64_t ts_ns = 0;
 
   uint8_t ver = 0; // 3 bits
-  uint8_t typ = 0; // 0=TM, 1=TC
+  uint8_t typ = 0; // 0=TM/report, 1=TC/request
   uint8_t shf = 0; // secondary-header flag
 
   uint16_t apid = 0; // 11 bits
