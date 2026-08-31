@@ -1,5 +1,6 @@
 #pragma once
 #include <boost/asio.hpp>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -14,12 +15,14 @@ class IpcSession;
 class IpcServer {
 public:
   using OnFrame = std::function<void(const exn::proto::Frame&, std::shared_ptr<IpcSession>)>;
+  using OnConnect = std::function<void(std::shared_ptr<IpcSession>)>;
 
   IpcServer(boost::asio::io_context& io, const std::string& host, uint16_t port);
 
   void start();
   void broadcast(const exn::proto::Frame& f);
   void set_on_frame(OnFrame cb) { on_frame_ = std::move(cb); }
+  void set_on_connect(OnConnect cb) { on_connect_ = std::move(cb); }
 
 private:
   friend class IpcSession;
@@ -31,6 +34,7 @@ private:
   std::mutex mtx_;
   std::vector<std::weak_ptr<IpcSession>> sessions_;
   OnFrame on_frame_;
+  OnConnect on_connect_;
 };
 
 class IpcSession : public std::enable_shared_from_this<IpcSession> {
@@ -42,12 +46,14 @@ public:
 
 private:
   void do_read();
+  void do_write();
 
   boost::asio::ip::tcp::socket sock_;
   IpcServer& owner_;
 
   std::vector<uint8_t> rxbuf_;
   std::array<uint8_t, 2048> tmp_{};
+  std::deque<std::shared_ptr<std::vector<uint8_t>>> tx_queue_;
 };
 
 } // namespace exn::daemon

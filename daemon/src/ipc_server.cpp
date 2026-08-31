@@ -26,6 +26,7 @@ void IpcServer::do_accept() {
         sessions_.push_back(s);
       }
       s->start();
+      if (on_connect_) on_connect_(s);
       std::cerr << "[ipc] client connected\n";
     }
     do_accept();
@@ -57,9 +58,29 @@ void IpcSession::start() {
 void IpcSession::send(const exn::proto::Frame& f) {
   auto bytes = std::make_shared<std::vector<uint8_t>>(exn::proto::encode(f));
   auto self = shared_from_this();
+  boost::asio::post(sock_.get_executor(), [self, bytes]() {
+    if (!self->sock_.is_open()) return;
+    const bool idle = self->tx_queue_.empty();
+    self->tx_queue_.push_back(bytes);
+    if (idle) self->do_write();
+  });
+}
+
+void IpcSession::do_write() {
+  if (tx_queue_.empty() || !sock_.is_open()) return;
+
+  auto self = shared_from_this();
+  auto bytes = tx_queue_.front();
   boost::asio::async_write(sock_, boost::asio::buffer(*bytes),
-    [self, bytes](const boost::system::error_code& /*ec*/, std::size_t /*n*/) {
-      // Best-effort IPC notification. Session cleanup happens when reads fail.
+    [self, bytes](const boost::system::error_code& ec, std::size_t) {
+      if (ec) {
+        self->tx_queue_.clear();
+        boost::system::error_code ignored;
+        self->sock_.close(ignored);
+        return;
+      }
+      self->tx_queue_.pop_front();
+      self->do_write();
     });
 }
 
@@ -67,7 +88,12 @@ void IpcSession::do_read() {
   auto self = shared_from_this();
   sock_.async_read_some(boost::asio::buffer(tmp_),
     [this, self](const boost::system::error_code& ec, std::size_t n) {
-      if (ec) return;
+      if (ec) {
+        boost::system::error_code ignored;
+        sock_.close(ignored);
+        tx_queue_.clear();
+        return;
+      }
 
       rxbuf_.insert(rxbuf_.end(), tmp_.data(), tmp_.data() + n);
 

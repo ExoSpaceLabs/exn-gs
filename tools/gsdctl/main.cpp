@@ -1,4 +1,5 @@
 #include <boost/asio.hpp>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
@@ -12,8 +13,13 @@ using boost::asio::ip::tcp;
 void print_usage(const char* exe) {
   std::cerr << "Usage: " << exe << " [--host HOST] [--port PORT] <command> [args...]\n"
             << "Commands:\n"
-            << "  ping              Query daemon/link state without sending a spacecraft TC\n"
-            << "  raw <hex_bytes>   Route one complete raw CCSDS TC Space Packet\n";
+            << "  ping              Check daemon IPC liveness (PONG)\n"
+            << "  status            Query current device-link state\n"
+            << "  stats             Query router transport counters\n"
+            << "  connect           Open the configured device transport\n"
+            << "  disconnect        Close the configured device transport\n"
+            << "  reconnect         Cycle the configured device transport\n"
+            << "  raw <hex_bytes>   Route one complete CCSDS Space Packet\n";
 }
 
 static bool decode_hex(const std::string& hex, std::vector<uint8_t>& bytes) {
@@ -30,6 +36,60 @@ static bool decode_hex(const std::string& hex, std::vector<uint8_t>& bytes) {
   }
   return true;
 }
+
+static bool read_frame(tcp::socket& socket,
+                       std::vector<uint8_t>& buffer,
+                       exn::proto::Frame& frame) {
+  std::array<uint8_t, 4096> tmp{};
+  while (!exn::proto::try_decode(buffer, frame)) {
+    const size_t n = socket.read_some(boost::asio::buffer(tmp));
+    if (n == 0U) return false;
+    buffer.insert(buffer.end(), tmp.data(), tmp.data() + n);
+  }
+  return true;
+}
+
+static bool unpack_text(const exn::proto::Frame& frame, std::string& value) {
+  return exn::proto::unpack_string(frame.payload, value);
+}
+
+static void print_frame(const exn::proto::Frame& frame) {
+  std::string text;
+  switch (frame.type) {
+    case exn::proto::MsgType::Hello:
+      if (unpack_text(frame, text)) std::cout << "Daemon: " << text << "\n";
+      break;
+    case exn::proto::MsgType::LinkState:
+      if (unpack_text(frame, text)) std::cout << "Device link: " << text << "\n";
+      break;
+    case exn::proto::MsgType::QueryResult:
+      if (unpack_text(frame, text)) std::cout << text << "\n";
+      break;
+    case exn::proto::MsgType::Error:
+      if (unpack_text(frame, text)) std::cerr << "Daemon error: " << text << "\n";
+      break;
+    case exn::proto::MsgType::PacketTx: {
+      exn::proto::PacketMeta meta;
+      std::string desc;
+      if (exn::proto::unpack_packet_meta(frame.payload, meta, desc)) {
+        std::cout << "Packet TX: APID=" << meta.apid
+                  << " SEQ=" << meta.seq
+                  << " SVC=" << static_cast<unsigned>(meta.svc)
+                  << " SSV=" << static_cast<unsigned>(meta.ssvc)
+                  << "\n";
+      }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+enum class LinkExpectation {
+  Any,
+  Connected,
+  Disconnected,
+};
 
 int main(int argc, char** argv) {
   std::string host = "127.0.0.1";
@@ -61,41 +121,92 @@ int main(int argc, char** argv) {
     tcp::resolver resolver(io);
     boost::asio::connect(socket, resolver.resolve(host, std::to_string(port)));
 
-    // The first daemon frame is Hello. A blocking tool can read it in one framed transaction.
-    std::vector<uint8_t> rx_buf(4096);
-    size_t n = socket.read_some(boost::asio::buffer(rx_buf));
-    rx_buf.resize(n);
-    exn::proto::Frame hello_frame;
-    if (exn::proto::try_decode(rx_buf, hello_frame) &&
-        hello_frame.type == exn::proto::MsgType::Hello) {
-      std::string server_name;
-      if (exn::proto::unpack_string(hello_frame.payload, server_name)) {
-        std::cout << "Connected to " << server_name << "\n";
-      }
-    }
-
+    std::vector<uint8_t> rx_buffer;
+    rx_buffer.reserve(4096);
     exn::proto::Frame frame;
+
+    // Every new session receives a Hello followed by the current device-link state.
+    if (!read_frame(socket, rx_buffer, frame)) {
+      std::cerr << "Error: daemon closed IPC during handshake\n";
+      return 1;
+    }
+    print_frame(frame);
+
+    do {
+      if (!read_frame(socket, rx_buffer, frame)) {
+        std::cerr << "Error: daemon closed IPC before initial link state\n";
+        return 1;
+      }
+      print_frame(frame);
+    } while (frame.type != exn::proto::MsgType::LinkState);
+
+    exn::proto::Frame request;
+    exn::proto::MsgType expected = exn::proto::MsgType::QueryResult;
+    LinkExpectation link_expectation = LinkExpectation::Any;
+
     if (command == "ping") {
-      frame.type = exn::proto::MsgType::Command;
-      frame.payload = exn::proto::pack_string("PING");
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("PING")};
+    } else if (command == "status") {
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("STATUS")};
+      expected = exn::proto::MsgType::LinkState;
+    } else if (command == "stats") {
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("STATS")};
+    } else if (command == "connect") {
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("CONNECT")};
+      expected = exn::proto::MsgType::LinkState;
+      link_expectation = LinkExpectation::Connected;
+    } else if (command == "disconnect") {
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("DISCONNECT")};
+      expected = exn::proto::MsgType::LinkState;
+      link_expectation = LinkExpectation::Disconnected;
+    } else if (command == "reconnect") {
+      request = {exn::proto::MsgType::Command, exn::proto::pack_string("RECONNECT")};
+      expected = exn::proto::MsgType::LinkState;
+      link_expectation = LinkExpectation::Connected;
     } else if (command == "raw") {
       if (args.empty()) {
         std::cerr << "Error: raw command requires one hex Space Packet\n";
         return 1;
       }
-      frame.type = exn::proto::MsgType::PacketSend;
-      if (!decode_hex(args[0], frame.payload)) {
+      request.type = exn::proto::MsgType::PacketSend;
+      if (!decode_hex(args[0], request.payload)) {
         std::cerr << "Error: raw packet must contain an even number of hexadecimal digits\n";
         return 1;
       }
+      expected = exn::proto::MsgType::PacketTx;
     } else {
       std::cerr << "Unknown command: " << command << "\n";
       return 1;
     }
 
-    const auto encoded = exn::proto::encode(frame);
+    const auto encoded = exn::proto::encode(request);
     boost::asio::write(socket, boost::asio::buffer(encoded));
-    std::cout << "Request sent.\n";
+
+    for (;;) {
+      if (!read_frame(socket, rx_buffer, frame)) {
+        std::cerr << "Error: daemon closed IPC before replying\n";
+        return 1;
+      }
+
+      print_frame(frame);
+      if (frame.type == exn::proto::MsgType::Error) return 1;
+      if (frame.type != expected) continue;
+
+      if (frame.type == exn::proto::MsgType::LinkState) {
+        std::string state;
+        if (!unpack_text(frame, state)) continue;
+        if (state.rfind("ERROR", 0) == 0) return 1;
+        if (link_expectation == LinkExpectation::Connected &&
+            state.rfind("CONNECTED", 0) != 0) {
+          continue;
+        }
+        if (link_expectation == LinkExpectation::Disconnected &&
+            state.rfind("DISCONNECTED", 0) != 0) {
+          continue;
+        }
+      }
+      break;
+    }
 
   } catch (const std::exception& e) {
     std::cerr << "Error: " << e.what() << "\n";

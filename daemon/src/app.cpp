@@ -10,9 +10,12 @@
 #include "exn/shared/types.hpp"
 
 #include <boost/asio.hpp>
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <sstream>
 
 namespace exn::daemon {
 
@@ -28,6 +31,13 @@ static void print_packet(const char* tag,
     << " LEN=" << m.len
     << " " << desc
     << "\n";
+}
+
+static std::string uppercase(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+    return static_cast<char>(std::toupper(c));
+  });
+  return value;
 }
 
 static std::string link_state_to_string(const exn::LinkState s) {
@@ -47,6 +57,21 @@ static exn::proto::Frame make_packet_frame(const exn::proto::MsgType type,
 
 static exn::proto::Frame make_error_frame(const std::string& message) {
   return {exn::proto::MsgType::Error, exn::proto::pack_string(message)};
+}
+
+static exn::proto::Frame make_query_result(const std::string& message) {
+  return {exn::proto::MsgType::QueryResult, exn::proto::pack_string(message)};
+}
+
+static std::string format_stats(const StateSnapshot& snap) {
+  std::ostringstream out;
+  out << "RX packets=" << snap.rx_packets
+      << " bytes=" << snap.rx_bytes
+      << " | TX packets=" << snap.tx_packets
+      << " bytes=" << snap.tx_bytes
+      << " | decode_errors=" << snap.decode_errors
+      << " framing_errors=" << snap.framing_errors;
+  return out.str();
 }
 
 App::App(AppConfig cfg) : cfg_(std::move(cfg)) {}
@@ -72,6 +97,10 @@ int App::run() {
   auto publish_link_state = [&]() {
     ipc.broadcast(current_link_frame());
   };
+
+  ipc.set_on_connect([&](const std::shared_ptr<IpcSession>& session) {
+    session->send(current_link_frame());
+  });
 
   link.set_on_state([&](const bool opened, const std::string& detail) {
     state.set_link(opened ? exn::LinkState::Connected : exn::LinkState::Disconnected, detail);
@@ -102,6 +131,7 @@ int App::run() {
     logger->store(rec);
 
     if (!decoded) {
+      state.on_decode_error();
       ipc.broadcast(make_error_frame(rec.summary));
       return;
     }
@@ -127,10 +157,8 @@ int App::run() {
         return;
       }
 
-      // The daemon is a transport/router. Packet direction and mission semantics
-      // belong to the client and endpoint, so both TC and TM Space Packets may be
-      // forwarded over the physical/simulator link.
       link.write_bytes(frame.payload.data(), frame.payload.size());
+      state.on_tx(frame.payload.size());
       ipc.broadcast(make_packet_frame(exn::proto::MsgType::PacketTx, meta, "TX"));
       if (cfg_.verbose) print_packet("[TX->LINK]", meta, "TX");
       return;
@@ -141,18 +169,32 @@ int App::run() {
       session->send(make_error_frame("Invalid IPC command payload"));
       return;
     }
+    command = uppercase(command);
 
     if (command == "CONNECT") {
-      link.start();
+      if (link.opened()) session->send(current_link_frame());
+      else link.start();
       return;
     }
     if (command == "DISCONNECT") {
       link.stop();
       return;
     }
-    if (command == "PING" || command == "ping") {
-      // IPC/link-state liveness check only. The daemon never synthesizes a mission TC.
+    if (command == "RECONNECT") {
+      link.stop();
+      link.start();
+      return;
+    }
+    if (command == "PING") {
+      session->send(make_query_result("PONG"));
+      return;
+    }
+    if (command == "STATUS") {
       session->send(current_link_frame());
+      return;
+    }
+    if (command == "STATS") {
+      session->send(make_query_result(format_stats(state.snapshot())));
       return;
     }
 
@@ -167,7 +209,6 @@ int App::run() {
   std::cout << "exn_gsd listening on " << cfg_.listen_host << ":" << cfg_.listen_port << "\n";
   std::cout << "Link port: " << (cfg_.serial_port.empty() ? "(none)" : cfg_.serial_port) << "\n";
 
-  // Transport ownership belongs to the daemon. Application traffic does not.
   if (!cfg_.serial_port.empty()) link.start();
 
   io.run();

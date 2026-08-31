@@ -2,11 +2,14 @@ cmake_minimum_required(VERSION 3.16)
 
 include(ExternalProject)
 
+set(HARDRT_VERSION 0.4.0)
 set(HARDRT_INSTALL_DIR ${CMAKE_BINARY_DIR}/_deps/hardrt-install)
 
 ExternalProject_Add(hardrt_ep
         GIT_REPOSITORY https://github.com/ExoSpaceLabs/hardrt.git
-        GIT_TAG main
+        GIT_TAG ${HARDRT_VERSION}
+        GIT_SHALLOW TRUE
+        UPDATE_DISCONNECTED TRUE
 
         SOURCE_DIR  ${CMAKE_BINARY_DIR}/_deps/hardrt-src
         BINARY_DIR  ${CMAKE_BINARY_DIR}/_deps/hardrt-build
