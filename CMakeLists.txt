@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(EXN_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
+include(CTest)
 include(cmake/warnings.cmake)
 include(cmake/deps.cmake)
 
@@ -14,5 +15,7 @@ add_subdirectory(shared)
 add_subdirectory(daemon)
 add_subdirectory(ui)
 add_subdirectory(sim)
-add_subdirectory(tests)
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 add_subdirectory(tools)
