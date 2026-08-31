@@ -20,6 +20,12 @@ void StateStore::on_packet(const exn::PacketRecord& rec) {
   while (ring_.size() > cap_) ring_.pop_front();
 }
 
+void StateStore::on_tx(const size_t bytes) {
+  std::lock_guard<std::mutex> lk(mtx_);
+  snap_.tx_packets++;
+  snap_.tx_bytes += bytes;
+}
+
 void StateStore::on_decode_error() {
   std::lock_guard<std::mutex> lk(mtx_);
   snap_.decode_errors++;
