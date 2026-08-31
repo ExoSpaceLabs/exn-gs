@@ -7,7 +7,6 @@
 #include <PusSecondaryHeaders.h>
 #include <PusTailoring.h>
 
-#include <algorithm>
 #include <memory>
 
 namespace exn::spacepacket {
@@ -15,6 +14,41 @@ namespace {
 
 void set_error(const char* context, const ccsds::Error& value, std::string& error) {
   error = std::string(context) + ": " + value.message();
+}
+
+bool prepare_primary(ccsds::Packet& packet,
+                     const std::uint16_t apid,
+                     const std::uint16_t sequence_count,
+                     std::string& error) {
+  packet.setUpdatePacketEnable(true);
+  packet.setPacketErrorControlMode(ccsds::PacketErrorControlMode::CRC16);
+
+  auto& primary = packet.getPrimaryHeader();
+  if (const auto result = primary.setVersionNumber(0U); !result) {
+    set_error("set CCSDS version", result.error(), error);
+    return false;
+  }
+  if (const auto result = primary.setAPID(apid); !result) {
+    set_error("set APID", result.error(), error);
+    return false;
+  }
+
+  packet.setSequenceFlags(ccsds::UNSEGMENTED);
+  if (const auto result = packet.setSequenceCount(sequence_count); !result) {
+    set_error("set sequence count", result.error(), error);
+    return false;
+  }
+  return true;
+}
+
+void fill_primary_meta(const ccsds::Header& primary, exn::proto::PacketMeta& meta) {
+  meta.ver = primary.getVersionNumber();
+  meta.typ = primary.getType();
+  meta.shf = primary.getSecondaryHeaderFlag();
+  meta.apid = primary.getAPID();
+  meta.seqf = primary.getSequenceFlags();
+  meta.seq = primary.getSequenceCount();
+  meta.len = primary.getDataLength();
 }
 
 } // namespace
@@ -31,24 +65,7 @@ bool build_pus_a_tc(const std::uint16_t apid,
   error.clear();
 
   ccsds::Packet space_packet;
-  space_packet.setUpdatePacketEnable(true);
-  space_packet.setPacketErrorControlMode(ccsds::PacketErrorControlMode::CRC16);
-
-  auto& primary = space_packet.getPrimaryHeader();
-  if (const auto result = primary.setVersionNumber(0U); !result) {
-    set_error("set CCSDS version", result.error(), error);
-    return false;
-  }
-  if (const auto result = primary.setAPID(apid); !result) {
-    set_error("set APID", result.error(), error);
-    return false;
-  }
-
-  space_packet.setSequenceFlags(ccsds::UNSEGMENTED);
-  if (const auto result = space_packet.setSequenceCount(sequence_count); !result) {
-    set_error("set sequence count", result.error(), error);
-    return false;
-  }
+  if (!prepare_primary(space_packet, apid, sequence_count, error)) return false;
 
   ccsds::pus::rev_a::TcTailoring tailoring;
   tailoring.sourceIdOctets = kPusATcSourceIdOctets;
@@ -78,6 +95,85 @@ bool build_pus_a_tc(const std::uint16_t apid,
   return true;
 }
 
+bool build_pus_a_tm(const std::uint16_t apid,
+                    const std::uint16_t sequence_count,
+                    const std::uint8_t service,
+                    const std::uint8_t subservice,
+                    const std::vector<std::uint8_t>& application_data,
+                    std::vector<std::uint8_t>& packet,
+                    std::string& error) {
+  packet.clear();
+  error.clear();
+
+  ccsds::Packet space_packet;
+  if (!prepare_primary(space_packet, apid, sequence_count, error)) return false;
+
+  ccsds::pus::rev_a::TmTailoring tailoring;
+  tailoring.destinationIdOctets = 0U;
+  tailoring.packetSubcounterPresent = false;
+  tailoring.timestampPresent = false;
+  tailoring.secondaryHeaderSpareOctets = 0U;
+  auto pus = std::make_shared<ccsds::pus::rev_a::TmHeader>(
+      tailoring, service, subservice, 0U, 0U, ccsds::time::CucTime{});
+
+  if (const auto result = space_packet.setSecondaryHeader(pus); !result) {
+    set_error("set PUS-A TM secondary header", result.error(), error);
+    return false;
+  }
+
+  if (!application_data.empty()) {
+    if (const auto result = space_packet.setApplicationData(application_data); !result) {
+      set_error("set application data", result.error(), error);
+      return false;
+    }
+  }
+
+  auto serialized = space_packet.serialize();
+  if (!serialized) {
+    set_error("serialize Space Packet", serialized.error(), error);
+    return false;
+  }
+
+  packet = std::move(serialized.value());
+  return true;
+}
+
+bool parse_pus_a_tc(const std::vector<std::uint8_t>& packet,
+                    exn::proto::PacketMeta& meta,
+                    std::vector<std::uint8_t>& application_data,
+                    std::string& error) {
+  meta = {};
+  meta.ts_ns = exn::now_ns();
+  application_data.clear();
+  error.clear();
+
+  ccsds::Packet space_packet;
+  space_packet.setPacketErrorControlMode(ccsds::PacketErrorControlMode::CRC16);
+
+  ccsds::pus::rev_a::TcTailoring tailoring;
+  tailoring.sourceIdOctets = kPusATcSourceIdOctets;
+  tailoring.secondaryHeaderSpareOctets = 0U;
+
+  const auto parsed = space_packet.deserialize<ccsds::pus::rev_a::TcHeader>(packet, tailoring);
+  if (!parsed) {
+    set_error("parse PUS-A TC", parsed.error(), error);
+    return false;
+  }
+
+  fill_primary_meta(space_packet.getPrimaryHeader(), meta);
+  const auto secondary = std::static_pointer_cast<ccsds::pus::rev_a::TcHeader>(
+      space_packet.getSecondaryHeader());
+  if (!secondary) {
+    error = "parse PUS-A TC: secondary header is missing";
+    return false;
+  }
+
+  meta.svc = secondary->getServiceType();
+  meta.ssvc = secondary->getServiceSubtype();
+  application_data = space_packet.getApplicationDataBytes();
+  return true;
+}
+
 bool decode_meta(const std::vector<std::uint8_t>& packet,
                  exn::proto::PacketMeta& meta,
                  std::string& error) {
@@ -102,17 +198,8 @@ bool decode_meta(const std::vector<std::uint8_t>& packet,
     return false;
   }
 
-  meta.ver = primary.getVersionNumber();
-  meta.typ = primary.getType();
-  meta.shf = primary.getSecondaryHeaderFlag();
-  meta.apid = primary.getAPID();
-  meta.seqf = primary.getSequenceFlags();
-  meta.seq = primary.getSequenceCount();
-  meta.len = primary.getDataLength();
-
-  if (meta.shf == 0U) {
-    return true;
-  }
+  fill_primary_meta(primary, meta);
+  if (meta.shf == 0U) return true;
 
   // Service extraction is intentionally best-effort. The daemon/router only
   // requires a structurally valid CCSDS packet; application header policy belongs
