@@ -73,9 +73,9 @@ open_terminal() {
 }
 
 if [[ ! -x "$SIM_BIN" || ! -x "$DAEMON_BIN" || ! -x "$UI_BIN" ]]; then
-  log "build artifacts missing; configuring ${BUILD_TYPE} build"
-  cmake -S "$ROOT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-  cmake --build "$BUILD_DIR" --parallel
+  log "runtime artifacts missing; building simulation stack"
+  BUILD_DIR="$BUILD_DIR" CMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    "$ROOT_DIR/scripts/build_simulation.sh" --no-tests
 fi
 
 [[ -x "$SIM_BIN" ]] || die "missing simulator binary: ${SIM_BIN}"

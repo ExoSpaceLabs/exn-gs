@@ -105,7 +105,42 @@ find_package(CCSDSPack 2.0 CONFIG QUIET)
 
 If a compatible installed package is unavailable, the build fetches and installs released CCSDSPack `v2.0.0` into the build tree. There are no developer-local absolute source paths.
 
-## Build and test
+## Build the simulation stack
+
+The preferred local build entry point is:
+
+```bash
+./scripts/build_simulation.sh
+```
+
+It configures and builds the complete simulator/HIL stack and all required dependencies:
+
+- `stm32_sim`;
+- `exn_gsd`;
+- `exn_gsui`;
+- `exn_gsdctl`;
+- `exn_shared` and transitive CCSDSPack, HardRT and FTXUI dependencies;
+- packet regression and simulator/daemon HIL tests.
+
+Useful variants:
+
+```bash
+# Rebuild the runtime stack without running tests.
+./scripts/build_simulation.sh --no-tests
+
+# Start from a clean build tree.
+./scripts/build_simulation.sh --clean
+
+# Select build type, build directory and parallelism.
+./scripts/build_simulation.sh \
+  --build-type Release \
+  --build-dir build-release \
+  --jobs 8
+```
+
+Run `./scripts/build_simulation.sh --help` for all options. Existing CMake build trees retain their configured generator; for a fresh tree the script prefers Ninja when available.
+
+The equivalent manual build remains:
 
 ```bash
 cmake -S . -B build -G Ninja \
@@ -123,7 +158,7 @@ Tests include packet/CRC/framing regression coverage plus a simulator-daemon HIL
 ./scripts/quick_test.sh
 ```
 
-The launcher builds the project if required, then opens three terminals in dependency order:
+The launcher reuses `build_simulation.sh --no-tests` if runtime artifacts are missing, then opens three terminals in dependency order:
 
 1. OBC/STM32 simulator on `127.0.0.1:9000`;
 2. GS daemon on IPC `127.0.0.1:7777`, connected to the simulator;
