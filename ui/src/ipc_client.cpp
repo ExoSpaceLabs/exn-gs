@@ -1,8 +1,6 @@
 #include "exn/ui/ipc_client.hpp"
 #include "exn/shared/protocol.hpp"
 
-#include <iostream>
-
 namespace exn::ui {
 
 IpcClient::IpcClient(boost::asio::io_context& io, std::string host, uint16_t port)
@@ -20,7 +18,6 @@ void IpcClient::do_connect() {
   boost::asio::async_connect(sock_, res,
     [this](const boost::system::error_code& ec, const boost::asio::ip::tcp::endpoint&) {
       if (ec) {
-        // Retry later
         auto t = std::make_shared<boost::asio::steady_timer>(io_);
         t->expires_after(std::chrono::seconds(1));
         t->async_wait([this, t](const boost::system::error_code&) { do_connect(); });
@@ -36,6 +33,7 @@ void IpcClient::do_read() {
       if (ec) {
         boost::system::error_code ignored;
         sock_.close(ignored);
+        tx_queue_.clear();
         do_connect();
         return;
       }
@@ -48,15 +46,38 @@ void IpcClient::do_read() {
     });
 }
 
-void IpcClient::send_command(const std::string& cmd) {
-  std::lock_guard<std::mutex> lk(tx_mtx_);
-  if (!sock_.is_open()) return;
-  exn::proto::Frame f{exn::proto::MsgType::Command, exn::proto::pack_string(cmd)};
-  auto bytes = std::make_shared<std::vector<uint8_t>>(exn::proto::encode(f));
+void IpcClient::send_frame(exn::proto::Frame frame) {
+  auto bytes = std::make_shared<std::vector<uint8_t>>(exn::proto::encode(frame));
+  boost::asio::post(io_, [this, bytes]() {
+    if (!sock_.is_open()) return;
+    const bool idle = tx_queue_.empty();
+    tx_queue_.push_back(bytes);
+    if (idle) do_write();
+  });
+}
+
+void IpcClient::do_write() {
+  if (tx_queue_.empty() || !sock_.is_open()) return;
+  auto bytes = tx_queue_.front();
   boost::asio::async_write(sock_, boost::asio::buffer(*bytes),
-    [bytes](const boost::system::error_code&, std::size_t) {
-      // ignore
+    [this, bytes](const boost::system::error_code& ec, std::size_t) {
+      if (ec) {
+        tx_queue_.clear();
+        boost::system::error_code ignored;
+        sock_.close(ignored);
+        return;
+      }
+      tx_queue_.pop_front();
+      do_write();
     });
+}
+
+void IpcClient::send_command(const std::string& cmd) {
+  send_frame({exn::proto::MsgType::Command, exn::proto::pack_string(cmd)});
+}
+
+void IpcClient::send_packet(const std::vector<uint8_t>& packet) {
+  send_frame({exn::proto::MsgType::PacketSend, packet});
 }
 
 } // namespace exn::ui
