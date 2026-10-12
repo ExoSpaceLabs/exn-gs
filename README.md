@@ -62,13 +62,12 @@ The UI owns operator/application behavior, including:
 
 - CCSDSPack v2 packet construction;
 - client-side packet sequence state;
-- System HK transaction IDs;
-- the optional periodic System HK task;
+- the optional periodic System HK snapshot task;
 - one-shot mission requests initiated by the operator.
 
 The UI displays `Daemon IPC` and `Device Link` independently. Daemon errors/messages are shown on the status line and do not overwrite transport state.
 
-System HK behavior sends PUS-C `TC[3,128]` while the UI task is enabled and both daemon IPC and device link are connected. The packet targets OBC APID `0x100`, uses GS Source ID `0x0010`, requests acceptance verification, and carries `{transaction_id:u16, include_mask:u8, detail_mask:u16}` with no routing envelope.
+System HK behavior sends PUS-C `TC[3,128]` with **empty Application Data**. The packet targets OBC APID `0x100`, uses GS Source ID `0x0010`, and requests acceptance verification. The OBC returns its complete cached spacecraft HK snapshot, including endpoint supervision/recovery state. The optional UI schedule is a Ground/HIL convenience and does not control OBC internal heartbeat/health polling.
 
 ### `stm32_sim`: endpoint simulator
 
@@ -232,7 +231,7 @@ Daemon commands:
 
 UI-owned application tasks:
 
-- `HK_ENABLE` — enable the two-second System HK schedule;
+- `HK_ENABLE` — enable the local 30-second System HK snapshot schedule;
 - `HK_DISABLE` — disable it;
 - `HK_REQ` — send one System HK request immediately when the device is connected.
 
