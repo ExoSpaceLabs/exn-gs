@@ -130,32 +130,43 @@ static bool supported_request(const TcMessage& tc) {
 }
 
 static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
-  uint16_t transaction_id = 0U;
-  uint8_t include_mask = 0U;
-  if (tc.application_data.size() >= 3U) {
-    transaction_id = exn_be_get_u16(tc.application_data.data());
-    include_mask = tc.application_data[2];
-  }
-
   const auto obc_hk = make_hk_report();
-  const bool include_obc = (include_mask & 0x01U) != 0U;
-  const bool missing_requested_endpoint = (include_mask & 0x1EU) != 0U;
 
-  // transaction_id, present_mask, status, block_count
-  std::vector<uint8_t> app(5U, 0U);
-  exn_be_put_u16(app.data(), transaction_id);
-  app[2] = include_obc ? 0x01U : 0x00U;
-  app[3] = missing_requested_endpoint ? 1U : 0U; // PARTIAL if non-OBC nodes requested
-  app[4] = include_obc ? 1U : 0U;
+  // request_id[4], snapshot_unix_ms, system_status, endpoint_count
+  std::vector<uint8_t> app(14U, 0U);
+  std::copy(tc.pus.request_id.begin(), tc.pus.request_id.end(), app.begin());
+  // snapshot_unix_ms stays zero because this simulator advertises UNSYNCED time.
+  app[12] = EXN_SYSTEM_HK_OK;
+  app[13] = 1U; // OBC only in the current HIL simulator profile.
 
-  if (include_obc) {
-    const auto old_size = app.size();
-    app.resize(old_size + 4U + obc_hk.size());
-    exn_be_put_u16(app.data() + old_size, APID_OBC);
-    exn_be_put_u16(app.data() + old_size + 2U,
-                   static_cast<uint16_t>(obc_hk.size()));
-    std::copy(obc_hk.begin(), obc_hk.end(), app.begin() + static_cast<std::ptrdiff_t>(old_size + 4U));
-  }
+  // Endpoint summary.
+  const auto endpoint_offset = app.size();
+  app.resize(endpoint_offset + sizeof(exn_system_hk_endpoint_prefix_t), 0U);
+  auto* endpoint = app.data() + endpoint_offset;
+  exn_be_put_u16(endpoint, APID_OBC);
+  endpoint[2] = EXN_SUPERVISION_OK;
+  endpoint[3] = EXN_STATE_READY;
+  endpoint[4] = EXN_RECOVERY_NONE;
+  endpoint[5] = EXN_RECOVERY_REASON_NONE;
+  endpoint[6] = EXN_RECOVERY_ACTION_NONE;
+  endpoint[7] = 0U;
+  exn_be_put_u16(endpoint + 8U, 0U);
+  exn_be_put_u32(endpoint + 10U, 0U);          // heartbeat age
+  exn_be_put_u32(endpoint + 14U, 0xFFFFFFFFU); // no HEALTH sample in this fixture
+  exn_be_put_u64(endpoint + 18U, 0U);          // no recovery yet
+  endpoint[26] = 1U;                           // one cached structure
+
+  // Cached HEARTBEAT structure.
+  const auto structure_offset = app.size();
+  app.resize(structure_offset + sizeof(exn_system_hk_structure_prefix_t) + obc_hk.size(), 0U);
+  auto* structure = app.data() + structure_offset;
+  exn_be_put_u16(structure, EXN_HK_HEARTBEAT);
+  exn_be_put_u32(structure + 2U, 0U);
+  exn_be_put_u16(structure + 6U, static_cast<uint16_t>(obc_hk.size()));
+  std::copy(obc_hk.begin(), obc_hk.end(),
+            app.begin() + static_cast<std::ptrdiff_t>(
+                structure_offset + sizeof(exn_system_hk_structure_prefix_t)));
+
   return app;
 }
 
