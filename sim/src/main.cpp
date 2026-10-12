@@ -104,7 +104,7 @@ static std::vector<uint8_t> make_hk_report() {
   std::vector<uint8_t> app(32U, 0U);
   exn_be_put_u16(app.data(), EXN_HK_HEARTBEAT);
   // sample_unix_ms remains 0 while this simulator is UNSYNCED.
-  app[10] = 2U; // READY in the common logical-state vocabulary.
+  app[10] = EXN_STATE_READY;
   app[11] = EXN_TIME_UNSYNCED;
   return app;
 }
