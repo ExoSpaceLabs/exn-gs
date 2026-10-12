@@ -2,18 +2,22 @@
 
 **EXN-GS** is the host-side ground-control and hardware-in-the-loop environment for the EXN avionics demonstrator. It provides a C++17 transport daemon, FTXUI operator client, command-line client, and STM32-oriented simulator for CCSDS/PUS traffic over Serial or TCP.
 
-## Current protocol baseline
+## Protocol baseline
 
-> [!IMPORTANT]
-> This repository currently implements the **transitional EXN PUS-A compatibility profile**. The normalized PUS-C service plan is maintained in `ExoSpaceLabs/exn/docs/services.md` and tracked in `ExoSpaceLabs/exn#6`. Do not extend the legacy Service 17/20/23 assignments in new GS features.
+EXN-GS implements the central **PUS Revision C** profile:
 
-- CCSDSPack v2.x, with v2.0.0 as the reproducible fallback baseline;
+- CCSDSPack v2.0.0;
 - CCSDS Space Packet version 0;
-- PUS revision A TC/TM secondary headers;
-- one-octet TC source ID and zero-octet TM destination ID;
-- CRC-16/CCITT-FALSE packet error control;
+- PUS-C TC/TM secondary headers;
+- fixed 16-bit PUS-C source/destination identifiers;
+- command-specific PUS acknowledgement flags;
+- PUS-C TM message type counter;
+- six-octet CUC telemetry timestamp;
+- CRC-16/CCITT-FALSE;
 - TC APID = destination endpoint;
 - TM APID = producing endpoint.
+
+The mission protocol is defined only in `ExoSpaceLabs/exn`.
 
 The **complete mission ICD** is maintained only in `ExoSpaceLabs/exn`: `docs/ICD.md`, `docs/services.md`, `docs/component-services.md`, `docs/icd/`, and the corresponding `interfaces/` artifacts. This repository implements the Ground/HIL side and shall not independently define mission-visible packet/service semantics.
 
@@ -64,11 +68,11 @@ The UI owns operator/application behavior, including:
 
 The UI displays `Daemon IPC` and `Device Link` independently. Daemon errors/messages are shown on the status line and do not overwrite transport state.
 
-Current System HK behavior sends legacy TC `3/10` every two seconds while the UI task is enabled **and** both daemon IPC and device link are connected. The packet is addressed to MCU APID `0x100`, uses GS Source ID `0x10`, and carries exactly `{transactionId:u16, include_mask:u8, detailMask:u16}` with no downstream proxy preamble. This packet number belongs to the compatibility profile; the target service plan moves System HK to mission-specific Service 3 subtypes during the coordinated PUS-C migration.
+System HK behavior sends PUS-C `TC[3,128]` while the UI task is enabled and both daemon IPC and device link are connected. The packet targets OBC APID `0x100`, uses GS Source ID `0x0010`, requests acceptance verification, and carries `{transaction_id:u16, include_mask:u8, detail_mask:u16}` with no routing envelope.
 
 ### `stm32_sim`: endpoint simulator
 
-The simulator validates incoming packets using the typed CCSDSPack v2 PUS-A TC parser and CRC, then emits CRC-protected PUS-A TM replies. Its current MCU identity is APID `0x100`.
+The simulator validates incoming packets using the typed CCSDSPack v2 PUS-C TC parser and CRC, then emits timestamped PUS-C TM replies. Its OBC identity is APID `0x100`.
 
 ## Components
 
@@ -251,16 +255,16 @@ Transport connection state and HK task state are independent. `CONNECT` does not
 Runtime logs, build trees, and IDE state are ignored. They are not source assets and should not be committed.
 
 
-## EXN service-profile migration
+## EXN service profile
 
-The GS daemon remains intentionally service-agnostic and should continue routing complete validated Space Packets. The PUS-C migration primarily affects `exn_gsui`, shared mission constants/builders, `stm32_sim`, fixtures and golden vectors. The GS and simulator must migrate in the same integration step as the central EXN interface artifacts so the HIL path never has two incompatible service catalogues.
+The GS daemon remains intentionally service-agnostic and routes complete structurally valid Space Packets. `exn_gsui`, `stm32_sim`, fixtures and golden vectors implement the same central PUS-C catalogue; there is no maintained PUS-A compatibility profile.
 
 
 ## Target EXN operator coverage
 
 The complete Ground/HIL and system contract is defined in `ExoSpaceLabs/exn` (`docs/icd/gs.md`, `docs/component-services.md`, `docs/services.md`, and `docs/ICD.md`). The list below is implementation coverage, not an independent service specification.
 
-After the coordinated PUS-C migration, the **application/UI layer** should expose:
+The **application/UI layer** shall progressively expose:
 
 - heartbeat/HK/sensor/alarm inspection;
 - Camera Module 3 control, acquisition and product catalog;
