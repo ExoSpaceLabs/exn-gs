@@ -8,6 +8,11 @@
 
 namespace exn::spacepacket {
 
+struct PusCTcInfo {
+  std::uint16_t source_id = 0U;
+  std::uint8_t acknowledgement_flags = 0U;
+};
+
 // Normative EXN packet profile:
 // - CCSDS Space Packet version 0
 // - ECSS PUS Revision C
@@ -40,7 +45,8 @@ bool build_pus_c_tm(std::uint16_t apid,
 bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
                     exn::proto::PacketMeta& meta,
                     std::vector<std::uint8_t>& application_data,
-                    std::string& error);
+                    std::string& error,
+                    PusCTcInfo* tc_info = nullptr);
 
 // Router-side inspection. The daemon requires valid CCSDS framing; PUS-C service
 // extraction is best-effort monitoring metadata and does not own mission semantics.
