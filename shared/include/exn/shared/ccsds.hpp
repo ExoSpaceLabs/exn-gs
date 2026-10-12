@@ -2,6 +2,7 @@
 
 #include "exn/shared/protocol.hpp"
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
