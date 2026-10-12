@@ -190,21 +190,22 @@ int UiApp::run() {
 
   auto send_system_hk = [&]() {
     std::vector<uint8_t> app_data(5U, 0U);
-    be_put_u16(app_data.data(), hk_transaction_id);
-    app_data[2] = 0x07U; // MCU + PI + FPGA
-    be_put_u16(app_data.data() + 3U, 0U); // default detail mask
+    exn_be_put_u16(app_data.data(), hk_transaction_id);
+    app_data[2] = 0x1FU; // OBC + PI-CAM + FPGA + Antenna + PI-MGMT
+    exn_be_put_u16(app_data.data() + 3U, 0U); // default detail mask
 
     std::vector<uint8_t> packet;
     std::string error;
-    if (!exn::spacepacket::build_pus_a_tc(APID_MCU,
+    if (!exn::spacepacket::build_pus_c_tc(APID_OBC,
                                            tc_sequence,
                                            SVC_HK,
-                                           SUB_SYS_HK_REQ,
-                                           SRCID_GS,
+                                           SUB_SYS_HK_REQUEST,
+                                           PUSID_GS,
+                                           EXN_PUS_TC_ACK_READ_DEFAULT,
                                            app_data,
                                            packet,
                                            error)) {
-      set_notice("ERROR: cannot build System HK TC: " + error);
+      set_notice("ERROR: cannot build PUS-C System HK TC: " + error);
       return;
     }
 
