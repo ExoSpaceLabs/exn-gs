@@ -77,7 +77,7 @@ void test_pus_c_tc_round_trip() {
   exn::spacepacket::PusCTcInfo tc_info;
   std::vector<uint8_t> parsed_application_data;
   expect(exn::spacepacket::parse_pus_c_tc(
-             packet, meta, tc_info, parsed_application_data, error),
+             packet, meta, parsed_application_data, error, &tc_info),
          "typed PUS-C TC parse with CRC");
   expect(parsed_application_data == application_data,
          "PUS-C TC application-data round trip");
@@ -92,7 +92,7 @@ void test_pus_c_tc_round_trip() {
   corrupted.back() ^= 0x01U;
   parsed_application_data.clear();
   expect(!exn::spacepacket::parse_pus_c_tc(
-             corrupted, meta, tc_info, parsed_application_data, error),
+             corrupted, meta, parsed_application_data, error, &tc_info),
          "CRC corruption rejected by PUS-C endpoint parser");
 }
 
