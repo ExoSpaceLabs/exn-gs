@@ -191,6 +191,10 @@ bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
   if (tc_info != nullptr) {
     tc_info->source_id = static_cast<std::uint16_t>(secondary->getSourceId());
     tc_info->acknowledgement_flags = secondary->getAcknowledgementFlags();
+    tc_info->request_id = {};
+    if (packet.size() >= 4U) {
+      std::copy_n(packet.begin(), 4U, tc_info->request_id.begin());
+    }
   }
   application_data = space_packet.getApplicationDataBytes();
   return true;
