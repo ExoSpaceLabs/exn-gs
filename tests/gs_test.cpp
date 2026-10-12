@@ -17,14 +17,6 @@ void expect(const bool condition, const char* message) {
   std::cerr << "FAIL: " << message << "\n";
 }
 
-std::vector<uint8_t> system_hk_payload(const uint16_t transaction_id) {
-  std::vector<uint8_t> payload(5U, 0U);
-  exn_be_put_u16(payload.data(), transaction_id);
-  payload[2] = 0x1FU;
-  exn_be_put_u16(payload.data() + 3U, 0U);
-  return payload;
-}
-
 void test_constants() {
   expect(APID_GS == 0x0F0U, "GS APID");
   expect(APID_OBC == 0x100U, "OBC APID");
@@ -41,7 +33,7 @@ void test_constants() {
 }
 
 void test_pus_c_tc_round_trip() {
-  const auto application_data = system_hk_payload(42U);
+  const std::vector<uint8_t> application_data{};
   std::vector<uint8_t> packet;
   std::string error;
 
@@ -140,7 +132,7 @@ void test_framer_fragmentation_and_concatenation() {
   expect(exn::spacepacket::build_pus_c_tc(
              APID_OBC, 20U, SVC_HK, SUB_SYS_HK_REQUEST, PUSID_GS,
              EXN_PUS_TC_ACK_READ_DEFAULT,
-             system_hk_payload(99U), tc, error),
+             {}, tc, error),
          "build PUS-C framer TC fixture");
   expect(exn::spacepacket::build_pus_c_tm(
              APID_OBC, 21U, SVC_HK, SUB_SYS_HK_REPORT,
