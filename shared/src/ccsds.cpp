@@ -161,7 +161,8 @@ bool build_pus_c_tm(const std::uint16_t apid,
 bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
                     exn::proto::PacketMeta& meta,
                     std::vector<std::uint8_t>& application_data,
-                    std::string& error) {
+                    std::string& error,
+                    PusCTcInfo* tc_info) {
   meta = {};
   meta.ts_ns = exn::now_ns();
   application_data.clear();
@@ -186,6 +187,10 @@ bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
 
   meta.svc = secondary->getServiceType();
   meta.ssvc = secondary->getServiceSubtype();
+  if (tc_info != nullptr) {
+    tc_info->source_id = static_cast<std::uint16_t>(secondary->getSourceId());
+    tc_info->acknowledgement_flags = secondary->getAcknowledgementFlags();
+  }
   application_data = space_packet.getApplicationDataBytes();
   return true;
 }
