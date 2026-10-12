@@ -7,6 +7,7 @@
 #include <PusSecondaryHeaders.h>
 #include <PusTailoring.h>
 
+#include <cstdint>
 #include <memory>
 
 namespace exn::spacepacket {
@@ -51,13 +52,36 @@ void fill_primary_meta(const ccsds::Header& primary, exn::proto::PacketMeta& met
   meta.len = primary.getDataLength();
 }
 
+ccsds::pus::rev_c::TmTailoring exn_tm_tailoring() {
+  ccsds::pus::rev_c::TmTailoring tailoring;
+  tailoring.timestampPresent = true;
+  tailoring.cuc = {
+      ccsds::time::Epoch::AgencyDefined,
+      ccsds::time::PFieldMode::Implicit,
+      4U,
+      2U};
+  tailoring.secondaryHeaderSpareOctets = 0U;
+  return tailoring;
+}
+
+ccsds::time::CucTime current_exn_cuc() {
+  constexpr std::uint64_t kNsPerSecond = 1000000000ULL;
+  constexpr std::uint64_t kFineScale = 65536ULL;
+  const std::uint64_t ns = exn::now_ns();
+  const std::uint64_t coarse = ns / kNsPerSecond;
+  const std::uint64_t remainder = ns % kNsPerSecond;
+  const std::uint64_t fine = (remainder * kFineScale) / kNsPerSecond;
+  return {coarse, fine};
+}
+
 } // namespace
 
-bool build_pus_a_tc(const std::uint16_t apid,
+bool build_pus_c_tc(const std::uint16_t apid,
                     const std::uint16_t sequence_count,
                     const std::uint8_t service,
                     const std::uint8_t subservice,
-                    const std::uint8_t source_id,
+                    const std::uint16_t source_id,
+                    const std::uint8_t acknowledgement_flags,
                     const std::vector<std::uint8_t>& application_data,
                     std::vector<std::uint8_t>& packet,
                     std::string& error) {
@@ -67,14 +91,11 @@ bool build_pus_a_tc(const std::uint16_t apid,
   ccsds::Packet space_packet;
   if (!prepare_primary(space_packet, apid, sequence_count, error)) return false;
 
-  ccsds::pus::rev_a::TcTailoring tailoring;
-  tailoring.sourceIdOctets = kPusATcSourceIdOctets;
-  tailoring.secondaryHeaderSpareOctets = 0U;
-  auto pus = std::make_shared<ccsds::pus::rev_a::TcHeader>(
-      tailoring, service, subservice, source_id, 0U);
+  auto pus = std::make_shared<ccsds::pus::rev_c::TcHeader>(
+      service, subservice, source_id, acknowledgement_flags);
 
   if (const auto result = space_packet.setSecondaryHeader(pus); !result) {
-    set_error("set PUS-A TC secondary header", result.error(), error);
+    set_error("set PUS-C TC secondary header", result.error(), error);
     return false;
   }
 
@@ -95,10 +116,13 @@ bool build_pus_a_tc(const std::uint16_t apid,
   return true;
 }
 
-bool build_pus_a_tm(const std::uint16_t apid,
+bool build_pus_c_tm(const std::uint16_t apid,
                     const std::uint16_t sequence_count,
                     const std::uint8_t service,
                     const std::uint8_t subservice,
+                    const std::uint16_t message_type_counter,
+                    const std::uint16_t destination_id,
+                    const std::uint8_t time_reference_status,
                     const std::vector<std::uint8_t>& application_data,
                     std::vector<std::uint8_t>& packet,
                     std::string& error) {
@@ -108,16 +132,12 @@ bool build_pus_a_tm(const std::uint16_t apid,
   ccsds::Packet space_packet;
   if (!prepare_primary(space_packet, apid, sequence_count, error)) return false;
 
-  ccsds::pus::rev_a::TmTailoring tailoring;
-  tailoring.destinationIdOctets = 0U;
-  tailoring.packetSubcounterPresent = false;
-  tailoring.timestampPresent = false;
-  tailoring.secondaryHeaderSpareOctets = 0U;
-  auto pus = std::make_shared<ccsds::pus::rev_a::TmHeader>(
-      tailoring, service, subservice, 0U, 0U, ccsds::time::CucTime{});
+  auto pus = std::make_shared<ccsds::pus::rev_c::TmHeader>(
+      exn_tm_tailoring(), service, subservice, message_type_counter,
+      destination_id, time_reference_status, current_exn_cuc());
 
   if (const auto result = space_packet.setSecondaryHeader(pus); !result) {
-    set_error("set PUS-A TM secondary header", result.error(), error);
+    set_error("set PUS-C TM secondary header", result.error(), error);
     return false;
   }
 
@@ -138,7 +158,7 @@ bool build_pus_a_tm(const std::uint16_t apid,
   return true;
 }
 
-bool parse_pus_a_tc(const std::vector<std::uint8_t>& packet,
+bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
                     exn::proto::PacketMeta& meta,
                     std::vector<std::uint8_t>& application_data,
                     std::string& error) {
@@ -150,21 +170,17 @@ bool parse_pus_a_tc(const std::vector<std::uint8_t>& packet,
   ccsds::Packet space_packet;
   space_packet.setPacketErrorControlMode(ccsds::PacketErrorControlMode::CRC16);
 
-  ccsds::pus::rev_a::TcTailoring tailoring;
-  tailoring.sourceIdOctets = kPusATcSourceIdOctets;
-  tailoring.secondaryHeaderSpareOctets = 0U;
-
-  const auto parsed = space_packet.deserialize<ccsds::pus::rev_a::TcHeader>(packet, tailoring);
+  const auto parsed = space_packet.deserialize<ccsds::pus::rev_c::TcHeader>(packet);
   if (!parsed) {
-    set_error("parse PUS-A TC", parsed.error(), error);
+    set_error("parse PUS-C TC", parsed.error(), error);
     return false;
   }
 
   fill_primary_meta(space_packet.getPrimaryHeader(), meta);
-  const auto secondary = std::static_pointer_cast<ccsds::pus::rev_a::TcHeader>(
+  const auto secondary = std::static_pointer_cast<ccsds::pus::rev_c::TcHeader>(
       space_packet.getSecondaryHeader());
   if (!secondary) {
-    error = "parse PUS-A TC: secondary header is missing";
+    error = "parse PUS-C TC: secondary header is missing";
     return false;
   }
 
@@ -201,13 +217,8 @@ bool decode_meta(const std::vector<std::uint8_t>& packet,
   fill_primary_meta(primary, meta);
   if (meta.shf == 0U) return true;
 
-  // Service extraction is intentionally best-effort. The daemon/router only
-  // requires a structurally valid CCSDS packet; application header policy belongs
-  // to the endpoint clients and the EXN ICD.
   if (meta.typ == 1U) {
-    ccsds::pus::rev_a::TcTailoring tailoring;
-    tailoring.sourceIdOctets = kPusATcSourceIdOctets;
-    ccsds::pus::rev_a::TcHeader pus(tailoring);
+    ccsds::pus::rev_c::TcHeader pus;
     const auto header_size = static_cast<std::size_t>(pus.getSize());
     if (packet.size() >= 6U + header_size) {
       const std::vector<std::uint8_t> header(packet.begin() + 6U,
@@ -218,8 +229,8 @@ bool decode_meta(const std::vector<std::uint8_t>& packet,
       }
     }
   } else {
-    ccsds::pus::rev_a::TmTailoring tailoring;
-    ccsds::pus::rev_a::TmHeader pus(tailoring);
+    const auto tailoring = exn_tm_tailoring();
+    ccsds::pus::rev_c::TmHeader pus(tailoring);
     const auto header_size = static_cast<std::size_t>(pus.getSize());
     if (packet.size() >= 6U + header_size) {
       const std::vector<std::uint8_t> header(packet.begin() + 6U,
