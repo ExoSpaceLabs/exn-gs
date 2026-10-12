@@ -6,8 +6,10 @@
 
 #include <boost/asio.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
