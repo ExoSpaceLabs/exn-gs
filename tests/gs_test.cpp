@@ -74,18 +74,25 @@ void test_pus_c_tc_round_trip() {
   expect(meta.svc == SVC_HK, "TC service");
   expect(meta.ssvc == SUB_SYS_HK_REQUEST, "TC subservice");
 
+  exn::spacepacket::PusCTcInfo tc_info;
   std::vector<uint8_t> parsed_application_data;
   expect(exn::spacepacket::parse_pus_c_tc(
-             packet, meta, parsed_application_data, error),
+             packet, meta, tc_info, parsed_application_data, error),
          "typed PUS-C TC parse with CRC");
   expect(parsed_application_data == application_data,
          "PUS-C TC application-data round trip");
+  expect(tc_info.source_id == PUSID_GS, "PUS-C TC source ID parsed");
+  expect(tc_info.acknowledgement_flags == EXN_PUS_TC_ACK_READ_DEFAULT,
+         "PUS-C acknowledgement flags parsed");
+  expect(tc_info.request_id[0] == packet[0] && tc_info.request_id[1] == packet[1]
+         && tc_info.request_id[2] == packet[2] && tc_info.request_id[3] == packet[3],
+         "PUS-C Service 1 request ID is primary-header packet ID + sequence control");
 
   auto corrupted = packet;
   corrupted.back() ^= 0x01U;
   parsed_application_data.clear();
   expect(!exn::spacepacket::parse_pus_c_tc(
-             corrupted, meta, parsed_application_data, error),
+             corrupted, meta, tc_info, parsed_application_data, error),
          "CRC corruption rejected by PUS-C endpoint parser");
 }
 
