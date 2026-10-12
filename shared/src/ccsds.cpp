@@ -7,6 +7,7 @@
 #include <PusSecondaryHeaders.h>
 #include <PusTailoring.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
