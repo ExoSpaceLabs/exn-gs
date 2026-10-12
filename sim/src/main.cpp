@@ -150,11 +150,13 @@ static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
   endpoint[5] = EXN_RECOVERY_REASON_NONE;
   endpoint[6] = EXN_RECOVERY_ACTION_NONE;
   endpoint[7] = 0U;
-  exn_be_put_u16(endpoint + 8U, 0U);
-  exn_be_put_u32(endpoint + 10U, 0U);          // heartbeat age
-  exn_be_put_u32(endpoint + 14U, 0xFFFFFFFFU); // no HEALTH sample in this fixture
-  exn_be_put_u64(endpoint + 18U, 0U);          // no recovery yet
-  endpoint[26] = 1U;                           // one cached structure
+  exn_be_put_u16(endpoint + 8U, 0U);           // recovery attempts
+  exn_be_put_u16(endpoint + 10U, 0U);          // recovery successes
+  endpoint[12] = EXN_RECOVERY_RESULT_NONE;
+  exn_be_put_u32(endpoint + 13U, 0U);          // heartbeat age
+  exn_be_put_u32(endpoint + 17U, 0xFFFFFFFFU); // no HEALTH sample in this fixture
+  exn_be_put_u64(endpoint + 21U, 0U);          // no recovery yet
+  endpoint[29] = 1U;                           // one cached structure
 
   // Cached HEARTBEAT structure.
   const auto structure_offset = app.size();
