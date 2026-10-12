@@ -84,37 +84,57 @@ static std::vector<uint8_t> build_tm(const uint16_t apid,
                                      const std::vector<uint8_t>& application_data = {}) {
   std::vector<uint8_t> packet;
   std::string error;
-  if (!exn::spacepacket::build_pus_a_tm(
-          apid, seq, svc, ssvc, application_data, packet, error)) {
-    std::printf("[EXN SIM TX] cannot build TM: %s\n", error.c_str());
+  if (!exn::spacepacket::build_pus_c_tm(
+          apid, seq, svc, ssvc,
+          seq, PUSID_GS, EXN_TIME_UNSYNCED,
+          application_data, packet, error)) {
+    std::printf("[EXN SIM TX] cannot build PUS-C TM: %s\n", error.c_str());
     std::fflush(stdout);
     return {};
   }
   return packet;
 }
 
-static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
-  // EXN System HK Report fixed header:
-  // [transactionId:u16][present_mask:u8][status:u8][reserved:u8]
-  std::vector<uint8_t> app(5U, 0U);
-  uint16_t transaction_id = 0U;
-  uint8_t include_mask = 0U;
-  if (tc.application_data.size() >= 3U) {
-    transaction_id = be_get_u16(tc.application_data.data());
-    include_mask = tc.application_data[2];
-  }
-
-  be_put_u16(app.data(), transaction_id);
-  app[2] = static_cast<uint8_t>(include_mask & 0x01U); // simulator exposes MCU only
-  app[3] = (include_mask & 0x06U) != 0U ? 1U : 0U;   // 0=OK, 1=PARTIAL
-  app[4] = 0U;
+static std::vector<uint8_t> make_hk_report() {
+  // HEARTBEAT TM[3,25]:
+  // structure_id, sample_unix_ms, state, time_state, version, uptime,
+  // last_error, restart/reset_count.
+  std::vector<uint8_t> app(32U, 0U);
+  exn_be_put_u16(app.data(), EXN_HK_HEARTBEAT);
+  // sample_unix_ms remains 0 while this simulator is UNSYNCED.
+  app[10] = 2U; // READY in the common logical-state vocabulary.
+  app[11] = EXN_TIME_UNSYNCED;
   return app;
 }
 
-static std::vector<uint8_t> make_hk_report() {
-  // Generic HK payload from the EXN ICD. The simulator currently supplies zeroed
-  // deterministic values; the wire layout is what matters for GS/HIL validation.
-  return std::vector<uint8_t>(20U, 0U);
+static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
+  uint16_t transaction_id = 0U;
+  uint8_t include_mask = 0U;
+  if (tc.application_data.size() >= 3U) {
+    transaction_id = exn_be_get_u16(tc.application_data.data());
+    include_mask = tc.application_data[2];
+  }
+
+  const auto obc_hk = make_hk_report();
+  const bool include_obc = (include_mask & 0x01U) != 0U;
+  const bool missing_requested_endpoint = (include_mask & 0x1EU) != 0U;
+
+  // transaction_id, present_mask, status, block_count
+  std::vector<uint8_t> app(5U, 0U);
+  exn_be_put_u16(app.data(), transaction_id);
+  app[2] = include_obc ? 0x01U : 0x00U;
+  app[3] = missing_requested_endpoint ? 1U : 0U; // PARTIAL if non-OBC nodes requested
+  app[4] = include_obc ? 1U : 0U;
+
+  if (include_obc) {
+    const auto old_size = app.size();
+    app.resize(old_size + 4U + obc_hk.size());
+    exn_be_put_u16(app.data() + old_size, APID_OBC);
+    exn_be_put_u16(app.data() + old_size + 2U,
+                   static_cast<uint16_t>(obc_hk.size()));
+    std::copy(obc_hk.begin(), obc_hk.end(), app.begin() + static_cast<std::ptrdiff_t>(old_size + 4U));
+  }
+  return app;
 }
 
 static void start_session() {
@@ -137,7 +157,7 @@ static void start_session() {
 
     TcMessage tc;
     std::string error;
-    if (!exn::spacepacket::parse_pus_a_tc(bytes, tc.meta, tc.application_data, error)) {
+    if (!exn::spacepacket::parse_pus_c_tc(bytes, tc.meta, tc.application_data, error)) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] rejected packet: %s\n", error.c_str());
         std::fflush(stdout);
@@ -145,7 +165,7 @@ static void start_session() {
       return;
     }
 
-    if (tc.meta.apid != APID_MCU) {
+    if (tc.meta.apid != APID_OBC) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] TC not addressed to MCU: APID=%u\n", tc.meta.apid);
         std::fflush(stdout);
@@ -218,15 +238,15 @@ static void tc_dispatch_task(void*) {
     g_tc_q.pop_blocking(tc);
 
     std::vector<uint8_t> reply;
-    if (tc.meta.svc == SVC_TIME && tc.meta.ssvc == SUB_TIME_SET) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_TIME, SUB_TIME_REPORT);
-    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQ) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_HK_REPORT, make_hk_report());
-    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQ) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
+    if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQUEST) {
+      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_HK_REPORT, make_hk_report());
+    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQUEST) {
+      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
                        make_system_hk_report(tc));
-    } else {
-      reply = build_tm(APID_MCU, tm_seq++, tc.meta.svc, 0xFEU);
+    } else if (g_verbose.load()) {
+      std::printf("[EXN SIM] PUS-C TC SVC=%u SSV=%u not implemented by simulator\n",
+                  tc.meta.svc, tc.meta.ssvc);
+      std::fflush(stdout);
     }
 
     tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
