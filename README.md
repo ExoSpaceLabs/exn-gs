@@ -254,3 +254,20 @@ Runtime logs, build trees, and IDE state are ignored. They are not source assets
 ## EXN service-profile migration
 
 The GS daemon remains intentionally service-agnostic and should continue routing complete validated Space Packets. The PUS-C migration primarily affects `exn_gsui`, shared mission constants/builders, `stm32_sim`, fixtures and golden vectors. The GS and simulator must migrate in the same integration step as the central EXN interface artifacts so the HIL path never has two incompatible service catalogues.
+
+
+## Target EXN operator coverage
+
+The central EXN target service contract is defined in `ExoSpaceLabs/exn/docs/component-services.md`.
+
+After the coordinated PUS-C migration, the **application/UI layer** should expose:
+
+- heartbeat/HK/sensor/alarm inspection;
+- Camera Module 3 control, acquisition and product catalog;
+- Camera/FPGA Service 220 object transfer/downlink;
+- FPGA capability/job/status/result control;
+- Pi Camera/Antenna restart and Pi reboot through PI-MGMT;
+- OBC time synchronization/status;
+- software inventory, stage, activate and rollback.
+
+The daemon remains service-agnostic and continues to route complete valid packets.
