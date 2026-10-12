@@ -37,7 +37,7 @@ The command-line tool shares the daemon IPC. `ping` checks daemon/link state; `r
 
 ### `stm32_sim`: endpoint simulator
 
-The simulator represents the MCU endpoint on the TCP HIL link. It performs typed PUS-A TC parsing with CRC validation and generates CCSDSPack v2 PUS-A telemetry replies.
+The simulator represents the OBC endpoint on the TCP HIL link. It performs typed PUS-C TC parsing with CRC validation and generates timestamped CCSDSPack v2 PUS-C telemetry replies.
 
 ## Data path
 
