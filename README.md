@@ -15,7 +15,7 @@
 - TC APID = destination endpoint;
 - TM APID = producing endpoint.
 
-The mission wire contract is maintained in the `ExoSpaceLabs/exn` repository under `docs/ICD.md` and `interfaces/`.
+The **complete mission ICD** is maintained only in `ExoSpaceLabs/exn`: `docs/ICD.md`, `docs/services.md`, `docs/component-services.md`, `docs/icd/`, and the corresponding `interfaces/` artifacts. This repository implements the Ground/HIL side and shall not independently define mission-visible packet/service semantics.
 
 ## Architecture
 
@@ -258,7 +258,7 @@ The GS daemon remains intentionally service-agnostic and should continue routing
 
 ## Target EXN operator coverage
 
-The central EXN target service contract is defined in `ExoSpaceLabs/exn/docs/component-services.md`.
+The complete Ground/HIL and system contract is defined in `ExoSpaceLabs/exn` (`docs/icd/gs.md`, `docs/component-services.md`, `docs/services.md`, and `docs/ICD.md`). The list below is implementation coverage, not an independent service specification.
 
 After the coordinated PUS-C migration, the **application/UI layer** should expose:
 
