@@ -209,7 +209,7 @@ int UiApp::run() {
 
   std::function<void()> arm_hk;
   arm_hk = [&]() {
-    hk_timer.expires_after(std::chrono::seconds(2));
+    hk_timer.expires_after(std::chrono::seconds(30));
     hk_timer.async_wait([&](const boost::system::error_code& ec) {
       if (ec) return;
       if (hk_enabled.load() && daemon_connected.load() && device_connected.load()) {
@@ -417,8 +417,8 @@ int UiApp::run() {
       text("  STATS         query router transport counters"),
       separator(),
       text("UI-owned application tasks:") | bold,
-      text("  HK_ENABLE     enable 2 s System HK requests"),
-      text("  HK_DISABLE    disable periodic System HK"),
+      text("  HK_ENABLE     enable 30 s System HK snapshots"),
+      text("  HK_DISABLE    disable periodic System HK snapshots"),
       text("  HK_REQ        send one System HK request"),
     }) | border | bgcolor(Color::Black) | color(Color::White);
 
