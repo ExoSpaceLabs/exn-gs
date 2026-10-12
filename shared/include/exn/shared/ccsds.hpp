@@ -8,42 +8,42 @@
 
 namespace exn::spacepacket {
 
-// EXN CCSDSPack v2 profile:
+// Normative EXN packet profile:
 // - CCSDS Space Packet version 0
-// - PUS revision A
-// - TC source ID: one octet
-// - TM destination ID: omitted
-// - CRC-16/CCITT-FALSE packet error control
-inline constexpr std::uint8_t kPusATcSourceIdOctets = 1U;
+// - ECSS PUS Revision C
+// - fixed 16-bit PUS-C source/destination identifiers
+// - PUS-C TM message type counter
+// - 6-octet CUC TM timestamp, agency-defined Unix epoch, implicit P-field
+// - CRC-16/CCITT-FALSE
 
-bool build_pus_a_tc(std::uint16_t apid,
+bool build_pus_c_tc(std::uint16_t apid,
                     std::uint16_t sequence_count,
                     std::uint8_t service,
                     std::uint8_t subservice,
-                    std::uint8_t source_id,
+                    std::uint16_t source_id,
+                    std::uint8_t acknowledgement_flags,
                     const std::vector<std::uint8_t>& application_data,
                     std::vector<std::uint8_t>& packet,
                     std::string& error);
 
-bool build_pus_a_tm(std::uint16_t apid,
+bool build_pus_c_tm(std::uint16_t apid,
                     std::uint16_t sequence_count,
                     std::uint8_t service,
                     std::uint8_t subservice,
+                    std::uint16_t message_type_counter,
+                    std::uint16_t destination_id,
+                    std::uint8_t time_reference_status,
                     const std::vector<std::uint8_t>& application_data,
                     std::vector<std::uint8_t>& packet,
                     std::string& error);
 
-// Endpoint-side parser for the EXN PUS-A TC profile. Unlike decode_meta(), this
-// validates the concrete secondary-header profile and packet CRC.
-bool parse_pus_a_tc(const std::vector<std::uint8_t>& packet,
+bool parse_pus_c_tc(const std::vector<std::uint8_t>& packet,
                     exn::proto::PacketMeta& meta,
                     std::vector<std::uint8_t>& application_data,
                     std::string& error);
 
-// Router-side inspection. Validates the primary header and declared packet
-// boundary, then extracts monitoring metadata. PUS-A service fields are decoded
-// on a best-effort basis so transport routing is not coupled to one application
-// secondary-header profile.
+// Router-side inspection. The daemon requires valid CCSDS framing; PUS-C service
+// extraction is best-effort monitoring metadata and does not own mission semantics.
 bool decode_meta(const std::vector<std::uint8_t>& packet,
                  exn::proto::PacketMeta& meta,
                  std::string& error);
