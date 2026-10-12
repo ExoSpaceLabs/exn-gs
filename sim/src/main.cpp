@@ -57,6 +57,7 @@ private:
 
 struct TcMessage {
   exn::proto::PacketMeta meta;
+  exn::spacepacket::PusCTcInfo pus;
   std::vector<uint8_t> application_data;
 };
 
@@ -83,12 +84,13 @@ static std::vector<uint8_t> build_tm(const uint16_t apid,
                                      const uint16_t seq,
                                      const uint8_t svc,
                                      const uint8_t ssvc,
+                                     const uint16_t destination_id,
                                      const std::vector<uint8_t>& application_data = {}) {
   std::vector<uint8_t> packet;
   std::string error;
   if (!exn::spacepacket::build_pus_c_tm(
           apid, seq, svc, ssvc,
-          seq, PUSID_GS, EXN_TIME_UNSYNCED,
+          seq, destination_id, EXN_TIME_UNSYNCED,
           application_data, packet, error)) {
     std::printf("[EXN SIM TX] cannot build PUS-C TM: %s\n", error.c_str());
     std::fflush(stdout);
@@ -107,6 +109,24 @@ static std::vector<uint8_t> make_hk_report() {
   app[10] = EXN_STATE_READY;
   app[11] = EXN_TIME_UNSYNCED;
   return app;
+}
+
+static std::vector<uint8_t> make_verification_success(const TcMessage& tc) {
+  return std::vector<uint8_t>(tc.pus.request_id.begin(), tc.pus.request_id.end());
+}
+
+static std::vector<uint8_t> make_verification_failure(const TcMessage& tc,
+                                                      const uint16_t failure_code) {
+  std::vector<uint8_t> app(8U, 0U);
+  std::copy(tc.pus.request_id.begin(), tc.pus.request_id.end(), app.begin());
+  exn_be_put_u16(app.data() + 4U, failure_code);
+  exn_be_put_u16(app.data() + 6U, 0U);
+  return app;
+}
+
+static bool supported_request(const TcMessage& tc) {
+  return tc.meta.svc == SVC_HK
+      && (tc.meta.ssvc == SUB_HK_REQUEST || tc.meta.ssvc == SUB_SYS_HK_REQUEST);
 }
 
 static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
@@ -159,7 +179,8 @@ static void start_session() {
 
     TcMessage tc;
     std::string error;
-    if (!exn::spacepacket::parse_pus_c_tc(bytes, tc.meta, tc.application_data, error)) {
+    if (!exn::spacepacket::parse_pus_c_tc(
+            bytes, tc.meta, tc.pus, tc.application_data, error)) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] rejected packet: %s\n", error.c_str());
         std::fflush(stdout);
@@ -239,20 +260,51 @@ static void tc_dispatch_task(void*) {
     TcMessage tc;
     g_tc_q.pop_blocking(tc);
 
+    const bool supported = supported_request(tc);
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_ACCEPTANCE) != 0U) {
+      const auto subtype = supported ? SUB_VERIFY_ACCEPT_OK : SUB_VERIFY_ACCEPT_FAIL;
+      const auto payload = supported
+          ? make_verification_success(tc)
+          : make_verification_failure(tc, 0x0001U);
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, subtype,
+                                   tc.pus.source_id, payload);
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
+    }
+
+    if (!supported) {
+      if (g_verbose.load()) {
+        std::printf("[EXN SIM] unsupported PUS-C TC SVC=%u SSV=%u\n",
+                    tc.meta.svc, tc.meta.ssvc);
+        std::fflush(stdout);
+      }
+      tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
+      continue;
+    }
+
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_START) != 0U) {
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, SUB_VERIFY_START_OK,
+                                   tc.pus.source_id, make_verification_success(tc));
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
+    }
+
     std::vector<uint8_t> reply;
     if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQUEST) {
-      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_HK_REPORT, make_hk_report());
+      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_HK_REPORT,
+                       tc.pus.source_id, make_hk_report());
     } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQUEST) {
       reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
-                       make_system_hk_report(tc));
-    } else if (g_verbose.load()) {
-      std::printf("[EXN SIM] PUS-C TC SVC=%u SSV=%u not implemented by simulator\n",
-                  tc.meta.svc, tc.meta.ssvc);
-      std::fflush(stdout);
+                       tc.pus.source_id, make_system_hk_report(tc));
+    }
+
+    if (!reply.empty()) g_tm_q.push_blocking({std::move(reply)});
+
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_COMPLETION) != 0U) {
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, SUB_VERIFY_COMPLETE_OK,
+                                   tc.pus.source_id, make_verification_success(tc));
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
     }
 
     tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
-    if (!reply.empty()) g_tm_q.push_blocking({std::move(reply)});
   }
 }
 
