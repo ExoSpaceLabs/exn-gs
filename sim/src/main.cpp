@@ -180,7 +180,7 @@ static void start_session() {
     TcMessage tc;
     std::string error;
     if (!exn::spacepacket::parse_pus_c_tc(
-            bytes, tc.meta, tc.pus, tc.application_data, error)) {
+            bytes, tc.meta, tc.application_data, error, &tc.pus)) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] rejected packet: %s\n", error.c_str());
         std::fflush(stdout);
