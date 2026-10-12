@@ -12,6 +12,7 @@ namespace exn::spacepacket {
 struct PusCTcInfo {
   std::uint16_t source_id = 0U;
   std::uint8_t acknowledgement_flags = 0U;
+  std::array<std::uint8_t, 4> request_id{};
 };
 
 // Normative EXN packet profile:
