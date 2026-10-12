@@ -178,7 +178,6 @@ int UiApp::run() {
   std::atomic<bool> device_connected{false};
   std::atomic<bool> hk_enabled{false};
   uint16_t tc_sequence = 1U;
-  uint16_t hk_transaction_id = 1U;
 
   auto set_notice = [&](const std::string& message) {
     {
@@ -189,11 +188,6 @@ int UiApp::run() {
   };
 
   auto send_system_hk = [&]() {
-    std::vector<uint8_t> app_data(5U, 0U);
-    exn_be_put_u16(app_data.data(), hk_transaction_id);
-    app_data[2] = 0x1FU; // OBC + PI-CAM + FPGA + Antenna + PI-MGMT
-    exn_be_put_u16(app_data.data() + 3U, 0U); // default detail mask
-
     std::vector<uint8_t> packet;
     std::string error;
     if (!exn::spacepacket::build_pus_c_tc(APID_OBC,
@@ -202,7 +196,7 @@ int UiApp::run() {
                                            SUB_SYS_HK_REQUEST,
                                            PUSID_GS,
                                            EXN_PUS_TC_ACK_READ_DEFAULT,
-                                           app_data,
+                                           {},
                                            packet,
                                            error)) {
       set_notice("ERROR: cannot build PUS-C System HK TC: " + error);
@@ -211,9 +205,6 @@ int UiApp::run() {
 
     client.send_packet(packet);
     tc_sequence = static_cast<uint16_t>((tc_sequence + 1U) & 0x3FFFU);
-    hk_transaction_id = hk_transaction_id == 0xFFFFU
-                          ? 1U
-                          : static_cast<uint16_t>(hk_transaction_id + 1U);
   };
 
   std::function<void()> arm_hk;
