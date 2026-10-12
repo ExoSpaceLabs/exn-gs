@@ -4,6 +4,9 @@
 
 ## Current protocol baseline
 
+> [!IMPORTANT]
+> This repository currently implements the **transitional EXN PUS-A compatibility profile**. The normalized PUS-C service plan is maintained in `ExoSpaceLabs/exn/docs/services.md` and tracked in `ExoSpaceLabs/exn#6`. Do not extend the legacy Service 17/20/23 assignments in new GS features.
+
 - CCSDSPack v2.x, with v2.0.0 as the reproducible fallback baseline;
 - CCSDS Space Packet version 0;
 - PUS revision A TC/TM secondary headers;
@@ -61,7 +64,7 @@ The UI owns operator/application behavior, including:
 
 The UI displays `Daemon IPC` and `Device Link` independently. Daemon errors/messages are shown on the status line and do not overwrite transport state.
 
-Current System HK behavior sends TC `3/10` every two seconds while the UI task is enabled **and** both daemon IPC and device link are connected. The packet is addressed to MCU APID `0x100`, uses GS Source ID `0x10`, and carries exactly `{transactionId:u16, include_mask:u8, detailMask:u16}` with no downstream proxy preamble.
+Current System HK behavior sends legacy TC `3/10` every two seconds while the UI task is enabled **and** both daemon IPC and device link are connected. The packet is addressed to MCU APID `0x100`, uses GS Source ID `0x10`, and carries exactly `{transactionId:u16, include_mask:u8, detailMask:u16}` with no downstream proxy preamble. This packet number belongs to the compatibility profile; the target service plan moves System HK to mission-specific Service 3 subtypes during the coordinated PUS-C migration.
 
 ### `stm32_sim`: endpoint simulator
 
@@ -84,9 +87,9 @@ SpaceWire/SpWKit is **not currently an EXN-GS dependency**. A future SpaceWire t
 - Boost.System / Boost.Asio;
 - FTXUI 5.0.0;
 - CCSDSPack v2.x;
-- HardRT **0.4.0** for `stm32_sim`.
+- HardRT **0.4.0** for `stm32_sim` (current repository pin).
 
-HardRT is pinned to the latest released version (`0.4.0`) rather than tracking its `main` branch, making clean GS builds reproducible.
+The current upstream HardRT release is **0.5.1**. EXN-GS intentionally remains reproducible against its existing 0.4.0 pin until the simulator/runtime upgrade is validated; the documentation must not describe 0.4.0 as the latest upstream release.
 
 On Debian/Ubuntu:
 
@@ -246,3 +249,8 @@ Transport connection state and HK task state are independent. `CONNECT` does not
 ## Repository hygiene
 
 Runtime logs, build trees, and IDE state are ignored. They are not source assets and should not be committed.
+
+
+## EXN service-profile migration
+
+The GS daemon remains intentionally service-agnostic and should continue routing complete validated Space Packets. The PUS-C migration primarily affects `exn_gsui`, shared mission constants/builders, `stm32_sim`, fixtures and golden vectors. The GS and simulator must migrate in the same integration step as the central EXN interface artifacts so the HIL path never has two incompatible service catalogues.
