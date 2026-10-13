@@ -6,8 +6,10 @@
 
 #include <boost/asio.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -55,6 +57,7 @@ private:
 
 struct TcMessage {
   exn::proto::PacketMeta meta;
+  exn::spacepacket::PusCTcInfo pus;
   std::vector<uint8_t> application_data;
 };
 
@@ -81,40 +84,92 @@ static std::vector<uint8_t> build_tm(const uint16_t apid,
                                      const uint16_t seq,
                                      const uint8_t svc,
                                      const uint8_t ssvc,
+                                     const uint16_t destination_id,
                                      const std::vector<uint8_t>& application_data = {}) {
   std::vector<uint8_t> packet;
   std::string error;
-  if (!exn::spacepacket::build_pus_a_tm(
-          apid, seq, svc, ssvc, application_data, packet, error)) {
-    std::printf("[EXN SIM TX] cannot build TM: %s\n", error.c_str());
+  if (!exn::spacepacket::build_pus_c_tm(
+          apid, seq, svc, ssvc,
+          seq, destination_id, EXN_TIME_UNSYNCED,
+          application_data, packet, error)) {
+    std::printf("[EXN SIM TX] cannot build PUS-C TM: %s\n", error.c_str());
     std::fflush(stdout);
     return {};
   }
   return packet;
 }
 
-static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
-  // EXN System HK Report fixed header:
-  // [transactionId:u16][present_mask:u8][status:u8][reserved:u8]
-  std::vector<uint8_t> app(5U, 0U);
-  uint16_t transaction_id = 0U;
-  uint8_t include_mask = 0U;
-  if (tc.application_data.size() >= 3U) {
-    transaction_id = be_get_u16(tc.application_data.data());
-    include_mask = tc.application_data[2];
-  }
-
-  be_put_u16(app.data(), transaction_id);
-  app[2] = static_cast<uint8_t>(include_mask & 0x01U); // simulator exposes MCU only
-  app[3] = (include_mask & 0x06U) != 0U ? 1U : 0U;   // 0=OK, 1=PARTIAL
-  app[4] = 0U;
+static std::vector<uint8_t> make_hk_report() {
+  // HEARTBEAT TM[3,25]:
+  // structure_id, sample_unix_ms, state, time_state, version, uptime,
+  // last_error, restart/reset_count.
+  std::vector<uint8_t> app(32U, 0U);
+  exn_be_put_u16(app.data(), EXN_HK_HEARTBEAT);
+  // sample_unix_ms remains 0 while this simulator is UNSYNCED.
+  app[10] = EXN_STATE_READY;
+  app[11] = EXN_TIME_UNSYNCED;
   return app;
 }
 
-static std::vector<uint8_t> make_hk_report() {
-  // Generic HK payload from the EXN ICD. The simulator currently supplies zeroed
-  // deterministic values; the wire layout is what matters for GS/HIL validation.
-  return std::vector<uint8_t>(20U, 0U);
+static std::vector<uint8_t> make_verification_success(const TcMessage& tc) {
+  return std::vector<uint8_t>(tc.pus.request_id.begin(), tc.pus.request_id.end());
+}
+
+static std::vector<uint8_t> make_verification_failure(const TcMessage& tc,
+                                                      const uint16_t failure_code) {
+  std::vector<uint8_t> app(8U, 0U);
+  std::copy(tc.pus.request_id.begin(), tc.pus.request_id.end(), app.begin());
+  exn_be_put_u16(app.data() + 4U, failure_code);
+  exn_be_put_u16(app.data() + 6U, 0U);
+  return app;
+}
+
+static bool supported_request(const TcMessage& tc) {
+  return tc.meta.svc == SVC_HK
+      && (tc.meta.ssvc == SUB_HK_REQUEST || tc.meta.ssvc == SUB_SYS_HK_REQUEST);
+}
+
+static std::vector<uint8_t> make_system_hk_report(const TcMessage& tc) {
+  const auto obc_hk = make_hk_report();
+
+  // request_id[4], snapshot_unix_ms, system_status, endpoint_count
+  std::vector<uint8_t> app(14U, 0U);
+  std::copy(tc.pus.request_id.begin(), tc.pus.request_id.end(), app.begin());
+  // snapshot_unix_ms stays zero because this simulator advertises UNSYNCED time.
+  app[12] = EXN_SYSTEM_HK_OK;
+  app[13] = 1U; // OBC only in the current HIL simulator profile.
+
+  // Endpoint summary.
+  const auto endpoint_offset = app.size();
+  app.resize(endpoint_offset + sizeof(exn_system_hk_endpoint_prefix_t), 0U);
+  auto* endpoint = app.data() + endpoint_offset;
+  exn_be_put_u16(endpoint, APID_OBC);
+  endpoint[2] = EXN_SUPERVISION_OK;
+  endpoint[3] = EXN_STATE_READY;
+  endpoint[4] = EXN_RECOVERY_NONE;
+  endpoint[5] = EXN_RECOVERY_REASON_NONE;
+  endpoint[6] = EXN_RECOVERY_ACTION_NONE;
+  endpoint[7] = 0U;
+  exn_be_put_u16(endpoint + 8U, 0U);           // recovery attempts
+  exn_be_put_u16(endpoint + 10U, 0U);          // recovery successes
+  endpoint[12] = EXN_RECOVERY_RESULT_NONE;
+  exn_be_put_u32(endpoint + 13U, 0U);          // heartbeat age
+  exn_be_put_u32(endpoint + 17U, 0xFFFFFFFFU); // no HEALTH sample in this fixture
+  exn_be_put_u64(endpoint + 21U, 0U);          // no recovery yet
+  endpoint[29] = 1U;                           // one cached structure
+
+  // Cached HEARTBEAT structure.
+  const auto structure_offset = app.size();
+  app.resize(structure_offset + sizeof(exn_system_hk_structure_prefix_t) + obc_hk.size(), 0U);
+  auto* structure = app.data() + structure_offset;
+  exn_be_put_u16(structure, EXN_HK_HEARTBEAT);
+  exn_be_put_u32(structure + 2U, 0U);
+  exn_be_put_u16(structure + 6U, static_cast<uint16_t>(obc_hk.size()));
+  std::copy(obc_hk.begin(), obc_hk.end(),
+            app.begin() + static_cast<std::ptrdiff_t>(
+                structure_offset + sizeof(exn_system_hk_structure_prefix_t)));
+
+  return app;
 }
 
 static void start_session() {
@@ -137,7 +192,8 @@ static void start_session() {
 
     TcMessage tc;
     std::string error;
-    if (!exn::spacepacket::parse_pus_a_tc(bytes, tc.meta, tc.application_data, error)) {
+    if (!exn::spacepacket::parse_pus_c_tc(
+            bytes, tc.meta, tc.application_data, error, &tc.pus)) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] rejected packet: %s\n", error.c_str());
         std::fflush(stdout);
@@ -145,7 +201,7 @@ static void start_session() {
       return;
     }
 
-    if (tc.meta.apid != APID_MCU) {
+    if (tc.meta.apid != APID_OBC) {
       if (g_verbose.load()) {
         std::printf("[EXN SIM RX] TC not addressed to MCU: APID=%u\n", tc.meta.apid);
         std::fflush(stdout);
@@ -217,20 +273,51 @@ static void tc_dispatch_task(void*) {
     TcMessage tc;
     g_tc_q.pop_blocking(tc);
 
+    const bool supported = supported_request(tc);
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_ACCEPTANCE) != 0U) {
+      const auto subtype = supported ? SUB_VERIFY_ACCEPT_OK : SUB_VERIFY_ACCEPT_FAIL;
+      const auto payload = supported
+          ? make_verification_success(tc)
+          : make_verification_failure(tc, 0x0001U);
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, subtype,
+                                   tc.pus.source_id, payload);
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
+    }
+
+    if (!supported) {
+      if (g_verbose.load()) {
+        std::printf("[EXN SIM] unsupported PUS-C TC SVC=%u SSV=%u\n",
+                    tc.meta.svc, tc.meta.ssvc);
+        std::fflush(stdout);
+      }
+      tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
+      continue;
+    }
+
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_START) != 0U) {
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, SUB_VERIFY_START_OK,
+                                   tc.pus.source_id, make_verification_success(tc));
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
+    }
+
     std::vector<uint8_t> reply;
-    if (tc.meta.svc == SVC_TIME && tc.meta.ssvc == SUB_TIME_SET) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_TIME, SUB_TIME_REPORT);
-    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQ) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_HK_REPORT, make_hk_report());
-    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQ) {
-      reply = build_tm(APID_MCU, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
-                       make_system_hk_report(tc));
-    } else {
-      reply = build_tm(APID_MCU, tm_seq++, tc.meta.svc, 0xFEU);
+    if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_HK_REQUEST) {
+      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_HK_REPORT,
+                       tc.pus.source_id, make_hk_report());
+    } else if (tc.meta.svc == SVC_HK && tc.meta.ssvc == SUB_SYS_HK_REQUEST) {
+      reply = build_tm(APID_OBC, tm_seq++, SVC_HK, SUB_SYS_HK_REPORT,
+                       tc.pus.source_id, make_system_hk_report(tc));
+    }
+
+    if (!reply.empty()) g_tm_q.push_blocking({std::move(reply)});
+
+    if ((tc.pus.acknowledgement_flags & EXN_PUS_TC_ACK_COMPLETION) != 0U) {
+      auto verification = build_tm(APID_OBC, tm_seq++, SVC_VERIFY, SUB_VERIFY_COMPLETE_OK,
+                                   tc.pus.source_id, make_verification_success(tc));
+      if (!verification.empty()) g_tm_q.push_blocking({std::move(verification)});
     }
 
     tm_seq = static_cast<uint16_t>(tm_seq & 0x3FFFU);
-    if (!reply.empty()) g_tm_q.push_blocking({std::move(reply)});
   }
 }
 

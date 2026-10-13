@@ -178,7 +178,6 @@ int UiApp::run() {
   std::atomic<bool> device_connected{false};
   std::atomic<bool> hk_enabled{false};
   uint16_t tc_sequence = 1U;
-  uint16_t hk_transaction_id = 1U;
 
   auto set_notice = [&](const std::string& message) {
     {
@@ -189,35 +188,28 @@ int UiApp::run() {
   };
 
   auto send_system_hk = [&]() {
-    std::vector<uint8_t> app_data(5U, 0U);
-    be_put_u16(app_data.data(), hk_transaction_id);
-    app_data[2] = 0x07U; // MCU + PI + FPGA
-    be_put_u16(app_data.data() + 3U, 0U); // default detail mask
-
     std::vector<uint8_t> packet;
     std::string error;
-    if (!exn::spacepacket::build_pus_a_tc(APID_MCU,
+    if (!exn::spacepacket::build_pus_c_tc(APID_OBC,
                                            tc_sequence,
                                            SVC_HK,
-                                           SUB_SYS_HK_REQ,
-                                           SRCID_GS,
-                                           app_data,
+                                           SUB_SYS_HK_REQUEST,
+                                           PUSID_GS,
+                                           EXN_PUS_TC_ACK_READ_DEFAULT,
+                                           {},
                                            packet,
                                            error)) {
-      set_notice("ERROR: cannot build System HK TC: " + error);
+      set_notice("ERROR: cannot build PUS-C System HK TC: " + error);
       return;
     }
 
     client.send_packet(packet);
     tc_sequence = static_cast<uint16_t>((tc_sequence + 1U) & 0x3FFFU);
-    hk_transaction_id = hk_transaction_id == 0xFFFFU
-                          ? 1U
-                          : static_cast<uint16_t>(hk_transaction_id + 1U);
   };
 
   std::function<void()> arm_hk;
   arm_hk = [&]() {
-    hk_timer.expires_after(std::chrono::seconds(2));
+    hk_timer.expires_after(std::chrono::seconds(30));
     hk_timer.async_wait([&](const boost::system::error_code& ec) {
       if (ec) return;
       if (hk_enabled.load() && daemon_connected.load() && device_connected.load()) {
@@ -425,8 +417,8 @@ int UiApp::run() {
       text("  STATS         query router transport counters"),
       separator(),
       text("UI-owned application tasks:") | bold,
-      text("  HK_ENABLE     enable 2 s System HK requests"),
-      text("  HK_DISABLE    disable periodic System HK"),
+      text("  HK_ENABLE     enable 30 s System HK snapshots"),
+      text("  HK_DISABLE    disable periodic System HK snapshots"),
       text("  HK_REQ        send one System HK request"),
     }) | border | bgcolor(Color::Black) | color(Color::White);
 

@@ -2,17 +2,24 @@
 
 **EXN-GS** is the host-side ground-control and hardware-in-the-loop environment for the EXN avionics demonstrator. It provides a C++17 transport daemon, FTXUI operator client, command-line client, and STM32-oriented simulator for CCSDS/PUS traffic over Serial or TCP.
 
-## Current protocol baseline
+## Protocol baseline
 
-- CCSDSPack v2.x, with v2.0.0 as the reproducible fallback baseline;
+EXN-GS implements the central **PUS Revision C** profile:
+
+- CCSDSPack v2.0.0;
 - CCSDS Space Packet version 0;
-- PUS revision A TC/TM secondary headers;
-- one-octet TC source ID and zero-octet TM destination ID;
-- CRC-16/CCITT-FALSE packet error control;
+- PUS-C TC/TM secondary headers;
+- fixed 16-bit PUS-C source/destination identifiers;
+- command-specific PUS acknowledgement flags;
+- PUS-C TM message type counter;
+- six-octet CUC telemetry timestamp;
+- CRC-16/CCITT-FALSE;
 - TC APID = destination endpoint;
 - TM APID = producing endpoint.
 
-The mission wire contract is maintained in the `ExoSpaceLabs/exn` repository under `docs/ICD.md` and `interfaces/`.
+The mission protocol is defined only in `ExoSpaceLabs/exn`.
+
+The **complete mission ICD** is maintained only in `ExoSpaceLabs/exn`: `docs/ICD.md`, `docs/services.md`, `docs/component-services.md`, `docs/icd/`, and the corresponding `interfaces/` artifacts. This repository implements the Ground/HIL side and shall not independently define mission-visible packet/service semantics.
 
 ## Architecture
 
@@ -55,17 +62,16 @@ The UI owns operator/application behavior, including:
 
 - CCSDSPack v2 packet construction;
 - client-side packet sequence state;
-- System HK transaction IDs;
-- the optional periodic System HK task;
+- the optional periodic System HK snapshot task;
 - one-shot mission requests initiated by the operator.
 
 The UI displays `Daemon IPC` and `Device Link` independently. Daemon errors/messages are shown on the status line and do not overwrite transport state.
 
-Current System HK behavior sends TC `3/10` every two seconds while the UI task is enabled **and** both daemon IPC and device link are connected. The packet is addressed to MCU APID `0x100`, uses GS Source ID `0x10`, and carries exactly `{transactionId:u16, include_mask:u8, detailMask:u16}` with no downstream proxy preamble.
+System HK behavior sends PUS-C `TC[3,128]` with **empty Application Data**. The packet targets OBC APID `0x100`, uses GS Source ID `0x0010`, and requests acceptance verification. The OBC returns its complete cached spacecraft HK snapshot, including endpoint supervision/recovery state. The optional UI schedule is a Ground/HIL convenience and does not control OBC internal heartbeat/health polling.
 
 ### `stm32_sim`: endpoint simulator
 
-The simulator validates incoming packets using the typed CCSDSPack v2 PUS-A TC parser and CRC, then emits CRC-protected PUS-A TM replies. Its current MCU identity is APID `0x100`.
+The simulator validates incoming packets using the typed CCSDSPack v2 PUS-C TC parser and CRC, then emits timestamped PUS-C TM replies. Its OBC identity is APID `0x100`.
 
 ## Components
 
@@ -84,9 +90,9 @@ SpaceWire/SpWKit is **not currently an EXN-GS dependency**. A future SpaceWire t
 - Boost.System / Boost.Asio;
 - FTXUI 5.0.0;
 - CCSDSPack v2.x;
-- HardRT **0.4.0** for `stm32_sim`.
+- HardRT **0.4.0** for `stm32_sim` (current repository pin).
 
-HardRT is pinned to the latest released version (`0.4.0`) rather than tracking its `main` branch, making clean GS builds reproducible.
+The current upstream HardRT release is **0.5.1**. EXN-GS intentionally remains reproducible against its existing 0.4.0 pin until the simulator/runtime upgrade is validated; the documentation must not describe 0.4.0 as the latest upstream release.
 
 On Debian/Ubuntu:
 
@@ -225,7 +231,7 @@ Daemon commands:
 
 UI-owned application tasks:
 
-- `HK_ENABLE` — enable the two-second System HK schedule;
+- `HK_ENABLE` — enable the local 30-second System HK snapshot schedule;
 - `HK_DISABLE` — disable it;
 - `HK_REQ` — send one System HK request immediately when the device is connected.
 
@@ -246,3 +252,25 @@ Transport connection state and HK task state are independent. `CONNECT` does not
 ## Repository hygiene
 
 Runtime logs, build trees, and IDE state are ignored. They are not source assets and should not be committed.
+
+
+## EXN service profile
+
+The GS daemon remains intentionally service-agnostic and routes complete structurally valid Space Packets. `exn_gsui`, `stm32_sim`, fixtures and golden vectors implement the same central PUS-C catalogue; there is no maintained PUS-A compatibility profile.
+
+
+## Target EXN operator coverage
+
+The complete Ground/HIL and system contract is defined in `ExoSpaceLabs/exn` (`docs/icd/gs.md`, `docs/component-services.md`, `docs/services.md`, and `docs/ICD.md`). The list below is implementation coverage, not an independent service specification.
+
+The **application/UI layer** shall progressively expose:
+
+- heartbeat/HK/sensor/alarm inspection;
+- Camera Module 3 control, acquisition and product catalog;
+- Camera/FPGA Service 220 object transfer/downlink;
+- FPGA capability/job/status/result control;
+- Pi Camera/Antenna restart and Pi reboot through PI-MGMT;
+- OBC time synchronization/status;
+- software inventory, stage, activate and rollback.
+
+The daemon remains service-agnostic and continues to route complete valid packets.
